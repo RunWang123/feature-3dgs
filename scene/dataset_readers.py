@@ -48,6 +48,42 @@ class SceneInfo(NamedTuple):
     ply_path: str
     semantic_feature_dim: int 
 
+def load_split_from_json(json_path, scene_name):
+    """
+    Load train/test split from JSON file.
+    
+    Args:
+        json_path: Path to JSON split file
+        scene_name: Scene name (e.g., "scene0686_01")
+    
+    Returns:
+        train_names: List of training image names (without extension)
+        test_names: List of test image names (without extension)
+    """
+    with open(json_path, 'r') as f:
+        split_data = json.load(f)
+    
+    if scene_name not in split_data['scenes']:
+        raise ValueError(f"Scene {scene_name} not found in JSON file")
+    
+    scene_data = split_data['scenes'][scene_name]
+    
+    # Collect all ref_views (training) and target_views (test)
+    train_names = []
+    test_names = []
+    
+    for case in scene_data:
+        if 'ref_views' in case:
+            train_names.extend(case['ref_views'])
+        if 'target_views' in case:
+            test_names.extend(case['target_views'])
+    
+    # Remove duplicates while preserving order
+    train_names = list(dict.fromkeys(train_names))
+    test_names = list(dict.fromkeys(test_names))
+    
+    return train_names, test_names
+
 def getNerfppNorm(cam_info):
     def get_center_and_diag(cam_centers):
         cam_centers = np.hstack(cam_centers)
@@ -145,7 +181,7 @@ def storePly(path, xyz, rgb):
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
 
-def readColmapSceneInfo(path, foundation_model, images, eval, llffhold=8):
+def readColmapSceneInfo(path, foundation_model, images, eval, llffhold=8, json_split_path=None):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -172,10 +208,41 @@ def readColmapSceneInfo(path, foundation_model, images, eval, llffhold=8):
     semantic_feature_dim = cam_infos[0].semantic_feature.shape[0]
 
     if eval:
-        train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 2] # avoid 1st to be test view
-        test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 2] 
-        # for i, item in enumerate(test_cam_infos): ### check test set
-        #     print('test image:', item[7])
+        # Check if JSON split file is provided
+        if json_split_path and os.path.exists(json_split_path):
+            # Use JSON-based split
+            scene_name = os.path.basename(path)
+            train_names, test_names = load_split_from_json(json_split_path, scene_name)
+            
+            print(f"Using JSON split for {scene_name}:")
+            print(f"  Train images: {len(train_names)}")
+            print(f"  Test images:  {len(test_names)}")
+            
+            # Create lookup for faster matching
+            train_names_set = set(train_names)
+            test_names_set = set(test_names)
+            
+            train_cam_infos = []
+            test_cam_infos = []
+            
+            for cam in cam_infos:
+                # Remove file extension from image name for comparison
+                img_name_no_ext = os.path.splitext(cam.image_name)[0]
+                
+                if img_name_no_ext in train_names_set:
+                    train_cam_infos.append(cam)
+                elif img_name_no_ext in test_names_set:
+                    test_cam_infos.append(cam)
+                # Images not in JSON are ignored
+            
+            print(f"  Loaded train: {len(train_cam_infos)}")
+            print(f"  Loaded test:  {len(test_cam_infos)}")
+        else:
+            # Use default llffhold split
+            train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 2] # avoid 1st to be test view
+            test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 2] 
+            # for i, item in enumerate(test_cam_infos): ### check test set
+            #     print('test image:', item[7])
     else:
         train_cam_infos = cam_infos
         test_cam_infos = []
