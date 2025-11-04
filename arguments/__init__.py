@@ -57,6 +57,7 @@ class ModelParams(ParamGroup):
         self.eval = False
         self.speedup = False ###
         self.json_split_path = ""  # Path to JSON file for custom train/test split (empty string for optional)
+        self.case_id = -1  # Case ID to select from JSON split (-1 = use all cases)
         self.render_items = ['RGB', 'Depth', 'Edge', 'Normal', 'Curvature', 'Feature Map']
         super().__init__(parser, "Loading Parameters", sentinel)
 

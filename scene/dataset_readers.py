@@ -48,13 +48,14 @@ class SceneInfo(NamedTuple):
     ply_path: str
     semantic_feature_dim: int 
 
-def load_split_from_json(json_path, scene_name):
+def load_split_from_json(json_path, scene_name, case_id=-1):
     """
     Load train/test split from JSON file.
     
     Args:
         json_path: Path to JSON split file
         scene_name: Scene name (e.g., "scene0686_01")
+        case_id: Case ID to select (0-indexed). If -1, use all cases.
     
     Returns:
         train_names: List of training image names (without extension)
@@ -68,19 +69,33 @@ def load_split_from_json(json_path, scene_name):
     
     scene_data = split_data['scenes'][scene_name]
     
-    # Collect all ref_views (training) and target_views (test)
-    train_names = []
-    test_names = []
-    
-    for case in scene_data:
-        if 'ref_views' in case:
-            train_names.extend(case['ref_views'])
-        if 'target_views' in case:
-            test_names.extend(case['target_views'])
-    
-    # Remove duplicates while preserving order
-    train_names = list(dict.fromkeys(train_names))
-    test_names = list(dict.fromkeys(test_names))
+    # If case_id is specified, use only that case
+    if case_id >= 0:
+        if case_id >= len(scene_data):
+            raise ValueError(f"Case ID {case_id} out of range. Scene has {len(scene_data)} cases (0-{len(scene_data)-1})")
+        
+        # Use only the specified case
+        case = scene_data[case_id]
+        train_names = case.get('ref_views', [])
+        test_names = case.get('target_views', [])
+        
+        print(f"  Using case {case_id} only (out of {len(scene_data)} total cases)")
+    else:
+        # Collect all ref_views (training) and target_views (test) from all cases
+        train_names = []
+        test_names = []
+        
+        for case in scene_data:
+            if 'ref_views' in case:
+                train_names.extend(case['ref_views'])
+            if 'target_views' in case:
+                test_names.extend(case['target_views'])
+        
+        # Remove duplicates while preserving order
+        train_names = list(dict.fromkeys(train_names))
+        test_names = list(dict.fromkeys(test_names))
+        
+        print(f"  Using all {len(scene_data)} cases")
     
     return train_names, test_names
 
@@ -181,7 +196,7 @@ def storePly(path, xyz, rgb):
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
 
-def readColmapSceneInfo(path, foundation_model, images, eval, llffhold=8, json_split_path=None):
+def readColmapSceneInfo(path, foundation_model, images, eval, llffhold=8, json_split_path=None, case_id=-1):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -212,7 +227,7 @@ def readColmapSceneInfo(path, foundation_model, images, eval, llffhold=8, json_s
         if json_split_path and os.path.exists(json_split_path):
             # Use JSON-based split
             scene_name = os.path.basename(path)
-            train_names, test_names = load_split_from_json(json_split_path, scene_name)
+            train_names, test_names = load_split_from_json(json_split_path, scene_name, case_id)
             
             print(f"Using JSON split for {scene_name}:")
             print(f"  Train images: {len(train_names)}")
