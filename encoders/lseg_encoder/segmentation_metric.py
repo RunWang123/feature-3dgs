@@ -521,7 +521,6 @@ def test(args):
         activation=args.activation,
     )
     labels = module.get_labels('ade20k')
-    num_classes = len(labels)
     input_transform = module.val_transform
 
     loader_kwargs = (
@@ -575,6 +574,23 @@ def test(args):
     """
 
     scales = [0.75, 1.0, 1.25, 1.75]
+    
+    ###
+    ########################################################################################
+    ################################## encode text feature #################################
+    text = ''
+    labelset = []
+    if args.label_src != 'default':
+        labelset = args.label_src.split(',')
+    # print("############################################################### labelset: ", labelset)
+    if labelset == []:
+        text = clip.tokenize(labels)
+        num_classes = len(labels)  # 150 ADE20K classes
+    else:
+        text = clip.tokenize(labelset)  # Fixed: use labelset instead of args.label_src
+        labels = labelset  # Use custom labels
+        num_classes = len(labelset)  # Use custom class count
+    
     # print("scales", scales)
     # print("outdir", args.outdir)
     evaluator = LSeg_MultiEvalModule(
@@ -590,20 +606,6 @@ def test(args):
     #     os.makedirs(outdir)
     
     w, h = 480, 360
-
-
-    ###
-    ########################################################################################
-    ################################## encode text feature #################################
-    text = ''
-    labelset = []
-    if args.label_src != 'default':
-        labelset = args.label_src.split(',')
-    # print("############################################################### labelset: ", labelset)
-    if labelset == []:
-        text = clip.tokenize(labels)
-    else:
-        text = clip.tokenize(args.label_src)
     
     hooks = {
             "clip_vitl16_384": [5, 11, 17, 23],
