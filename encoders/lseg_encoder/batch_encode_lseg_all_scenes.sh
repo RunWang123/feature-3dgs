@@ -16,10 +16,10 @@ set -e  # Exit on error
 DATASET_BASE="/scratch/runw/project/colmap/scannet_test_feature3dgs"
 
 # LSeg model checkpoint path
-LSEG_WEIGHTS="/home/runw/Project/feature-3dgs/encoders/lseg_encoder/demo_e200.ckpt"
+LSEG_WEIGHTS="/home/runw/project/feature-3dgs/encoders/lseg_encoder/demo_e200.ckpt"
 
 # LSeg encoder script path
-ENCODE_SCRIPT="/home/runw/Project/feature-3dgs/encoders/lseg_encoder/encode_images.py"
+ENCODE_SCRIPT="/home/runw/project/feature-3dgs/encoders/lseg_encoder/encode_images.py"
 
 # Number of workers (0 = main thread only, safer for clusters)
 WORKERS=0
