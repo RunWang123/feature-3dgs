@@ -82,7 +82,7 @@ for SCENE_DIR in "${SCENE_DIRS[@]}"; do
         echo "⚠️  WARNING: Images directory not found: ${IMAGES_DIR}"
         echo "    Skipping ${SCENE_NAME}"
         echo ""
-        ((SKIPPED++))
+        SKIPPED=$((SKIPPED + 1))
         continue
     fi
     
@@ -92,7 +92,7 @@ for SCENE_DIR in "${SCENE_DIRS[@]}"; do
         echo "⚠️  WARNING: No images found in ${IMAGES_DIR}"
         echo "    Skipping ${SCENE_NAME}"
         echo ""
-        ((SKIPPED++))
+        SKIPPED=$((SKIPPED + 1))
         continue
     fi
     
@@ -106,7 +106,7 @@ for SCENE_DIR in "${SCENE_DIRS[@]}"; do
             echo "✅ Features already exist (${FEATURE_COUNT} files)"
             echo "   Skipping ${SCENE_NAME} (delete ${OUTPUT_DIR} to reprocess)"
             echo ""
-            ((SKIPPED++))
+            SKIPPED=$((SKIPPED + 1))
             continue
         elif [ ${FEATURE_COUNT} -gt 0 ]; then
             echo "⚠️  Partial features found (${FEATURE_COUNT}/${IMG_COUNT})"
@@ -136,14 +136,14 @@ for SCENE_DIR in "${SCENE_DIRS[@]}"; do
         
         if [ ${FEATURE_COUNT} -eq ${IMG_COUNT} ]; then
             echo "✅ SUCCESS: Generated ${FEATURE_COUNT} features for ${SCENE_NAME}"
-            ((PROCESSED++))
+            PROCESSED=$((PROCESSED + 1))
         else
             echo "⚠️  WARNING: Feature count mismatch (${FEATURE_COUNT} features vs ${IMG_COUNT} images)"
-            ((FAILED++))
+            FAILED=$((FAILED + 1))
         fi
     else
         echo "❌ FAILED: Error processing ${SCENE_NAME}"
-        ((FAILED++))
+        FAILED=$((FAILED + 1))
     fi
     
     echo ""
