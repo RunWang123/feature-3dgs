@@ -207,7 +207,6 @@ for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
             --eval \
             --json_split_path "${JSON_SPLIT_PATH}" \
             --case_id ${CASE_ID} \
-            --disable_viewer \
             2>&1
         
         TRAIN_STATUS=$?

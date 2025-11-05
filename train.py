@@ -262,7 +262,12 @@ if __name__ == "__main__":
     safe_state(args.quiet)
 
     # Start GUI server, configure and run training
-    network_gui.init(args.ip, args.port)
+    # Disable GUI to avoid port conflicts in batch processing
+    try:
+        network_gui.init(args.ip, args.port)
+    except OSError as e:
+        print(f"Warning: Could not start GUI server (port {args.port} in use), continuing without GUI")
+    
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
 
