@@ -306,7 +306,15 @@ def readColmapSceneInfo(path, foundation_model, images, eval, llffhold=8, json_s
             xyz, rgb, _ = read_points3D_binary(bin_path)
             
         except:
-            xyz, rgb, _ = read_points3D_text(txt_path)
+            try:
+                xyz, rgb, _ = read_points3D_text(txt_path)
+            except:
+                # No COLMAP points available, use random initialization like synthetic scenes
+                print("No COLMAP 3D points found. Generating random point cloud for initialization...")
+                num_pts = 100_000
+                print(f"Generating random point cloud ({num_pts})...")
+                xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
+                rgb = np.random.random((num_pts, 3)) * 255.0
         storePly(ply_path, xyz, rgb)
     try:
         pcd = fetchPly(ply_path)

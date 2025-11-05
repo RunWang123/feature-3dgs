@@ -4,7 +4,8 @@ Create feature-3dgs compatible dataset with ScanNet ground truth poses.
 Replicates the exact structure of scannet_test_feature3dgs:
 - Only first 30 images (000000, 000010, 000020, ..., 000290)
 - 448×448 PNG format
-- All 131 labels
+- All 131 labels (copied as-is)
+- All 131 depths (copied as-is)
 - Ground truth camera poses from ScanNet (not COLMAP reconstruction)
 """
 
@@ -61,6 +62,7 @@ def process_scene(scene_path, output_path, target_size=448, num_images=30):
     scene_name = os.path.basename(scene_path)
     images_dir = os.path.join(scene_path, 'images')
     labels_dir = os.path.join(scene_path, 'labels')
+    depths_dir = os.path.join(scene_path, 'depths')
     
     print(f"\n{'='*70}")
     print(f"Processing scene: {scene_name}")
@@ -69,10 +71,12 @@ def process_scene(scene_path, output_path, target_size=448, num_images=30):
     # Create output directories matching feature3dgs structure
     output_images_dir = os.path.join(output_path, 'images')
     output_labels_dir = os.path.join(output_path, 'labels')
+    output_depths_dir = os.path.join(output_path, 'depths')
     output_sparse_dir = os.path.join(output_path, 'sparse', '0')
     
     os.makedirs(output_images_dir, exist_ok=True)
     os.makedirs(output_labels_dir, exist_ok=True)
+    os.makedirs(output_depths_dir, exist_ok=True)
     os.makedirs(output_sparse_dir, exist_ok=True)
     
     # Get all NPZ files and sort
@@ -148,6 +152,19 @@ def process_scene(scene_path, output_path, target_size=448, num_images=30):
     else:
         print(f"  ⚠️  Warning: Labels folder not found at {labels_dir}")
     
+    # Copy ALL depths (131 depth files, not just 30)
+    print(f"\nCopying depths folder...")
+    if os.path.exists(depths_dir):
+        # Copy all depth files
+        depth_files = [f for f in os.listdir(depths_dir) if f.endswith(('.png', '.npy'))]
+        for depth_file in tqdm(depth_files):
+            src = os.path.join(depths_dir, depth_file)
+            dst = os.path.join(output_depths_dir, depth_file)
+            shutil.copy2(src, dst)
+        print(f"  Copied {len(depth_files)} depth files")
+    else:
+        print(f"  ⚠️  Warning: Depths folder not found at {depths_dir}")
+    
     # Convert camera poses (only for the 30 selected images)
     print(f"\nConverting camera poses to COLMAP format...")
     image_data = []
@@ -197,6 +214,9 @@ def process_scene(scene_path, output_path, target_size=448, num_images=30):
     if os.path.exists(output_labels_dir):
         label_count = len([f for f in os.listdir(output_labels_dir) if f.endswith('.png')])
         print(f"    ├── labels/         ({label_count} PNG files)")
+    if os.path.exists(output_depths_dir):
+        depth_count = len([f for f in os.listdir(output_depths_dir)])
+        print(f"    ├── depths/         ({depth_count} depth files)")
     print(f"    └── sparse/0/       (cameras.txt, images.txt, points3D.txt + .bin)")
     print(f"{'='*70}\n")
     
