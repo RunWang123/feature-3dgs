@@ -25,6 +25,7 @@ from tqdm import tqdm
 import pandas as pd
 import json
 from datetime import datetime
+import matplotlib.pyplot as plt
 
 # Add paths for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -64,6 +65,35 @@ def create_label_remapping(label_path, target_labels):
     
     # Vectorized remapping function (0 stays 0 for background/unlabeled)
     return np.vectorize(lambda x: id_to_newid.get(x, target_labels.index('other') + 1) if x != 0 else 0)
+
+
+def get_lsm_palette(num_labels):
+    """
+    Generate LSM-compatible color palette using matplotlib's tab10 colormap.
+    This matches the exact color scheme used in the LSM project.
+    
+    EXACT SAME AS segmentation.py get_lsm_palette() function.
+    
+    Args:
+        num_labels: Number of semantic labels (e.g., 8 for LSM's default labels)
+    
+    Returns:
+        palette: List of RGB values [R0,G0,B0,R1,G1,B1,...] for PIL putpalette()
+    """
+    # LSM uses: NUM_LABELS = len(LABELS) + 1 to include background
+    num_classes = num_labels + 1  # +1 for background/unlabeled (class 0)
+    
+    # Get tab10 colormap (same as LSM)
+    cmap = plt.cm.get_cmap('tab10', num_classes)
+    
+    # Extract RGB values (first 3 channels, ignore alpha)
+    # and convert to 0-255 range
+    palette = []
+    for i in range(num_classes):
+        rgb = cmap(i)[:3]  # Get RGB, ignore alpha
+        palette.extend([int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255)])
+    
+    return palette
 
 
 def load_and_remap_label(label_path, remap_fn, target_size=None):
@@ -384,6 +414,33 @@ def compute_segmentation(args):
                 print(f"Debug - pred_class shape: {pred_class.shape}")
                 print(f"Debug - gt_label shape: {gt_label_clamped.shape}")
             
+            # Visualize GT labels (save first 5 samples for verification)
+            if args.visualize_gt and feature_files.index(feature_file) < 5:
+                vis_dir = os.path.join(args.data, 'gt_label_visualizations', split_name)
+                os.makedirs(vis_dir, exist_ok=True)
+                
+                # Get LSM color palette
+                lsm_palette = get_lsm_palette(len(labelset))
+                
+                # Convert GT label to colored image (EXACT same as segmentation.py)
+                gt_vis = Image.fromarray(gt_label_clamped.cpu().numpy().astype('uint8'))
+                gt_vis.putpalette(lsm_palette)
+                gt_vis_rgb = gt_vis.convert('RGB')
+                
+                # Save GT visualization
+                gt_vis_path = os.path.join(vis_dir, f"{frame_id}_gt_label.png")
+                gt_vis_rgb.save(gt_vis_path)
+                
+                # Also save prediction visualization for comparison
+                pred_vis = Image.fromarray(pred_class.cpu().numpy().astype('uint8'))
+                pred_vis.putpalette(lsm_palette)
+                pred_vis_rgb = pred_vis.convert('RGB')
+                pred_vis_path = os.path.join(vis_dir, f"{frame_id}_pred.png")
+                pred_vis_rgb.save(pred_vis_path)
+                
+                if feature_file == feature_files[0]:
+                    print(f"Saved GT visualization to: {vis_dir}")
+            
             # Update metrics
             miou_metric.update(pred_class, gt_label_clamped)
             accuracy_metric.update(pred_class, gt_label_clamped)
@@ -451,6 +508,8 @@ if __name__ == "__main__":
                        help='Comma-separated semantic labels (e.g., "wall,floor,ceiling,chair,table,sofa,bed,other")')
     parser.add_argument('--output', type=str, default=None,
                        help='Path to save results JSON file (e.g., results/segmentation_metrics.json)')
+    parser.add_argument('--visualize_gt', action='store_true',
+                       help='Save GT label visualizations (first 5 samples) with LSM colors for verification')
     
     args = parser.parse_args()
     
