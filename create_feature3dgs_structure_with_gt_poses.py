@@ -6,7 +6,12 @@ Replicates the exact structure of scannet_test_feature3dgs:
 - 448×448 PNG format
 - All 131 labels (copied as-is)
 - All 131 depths (copied as-is)
-- Ground truth camera poses from ScanNet (not COLMAP reconstruction)
+- Ground truth camera poses from ScanNet (NORMALIZED to [-1, 1] like Blender synthetic data)
+
+Key difference from original feature3dgs:
+- Camera poses are NORMALIZED to standard coordinate space (not COLMAP reconstruction)
+- This allows using fixed random initialization (100k points in [-1.3, 1.3])
+- Same training pipeline as Blender synthetic scenes
 """
 
 import numpy as np
@@ -167,19 +172,46 @@ def process_scene(scene_path, output_path, target_size=448, num_images=30):
     
     # Convert camera poses (only for the 30 selected images)
     print(f"\nConverting camera poses to COLMAP format...")
+    
+    # First pass: collect all camera centers to compute normalization
+    print(f"Computing scene normalization...")
+    camera_centers = []
+    all_poses = []
+    
+    for npz_file in selected_npz_files:
+        npz_path = os.path.join(images_dir, npz_file)
+        data = np.load(npz_path)
+        pose_c2w = data['camera_pose']
+        all_poses.append(pose_c2w)
+        # Extract camera center from C2W
+        camera_centers.append(pose_c2w[:3, 3])
+    
+    camera_centers = np.array(camera_centers)
+    scene_center = np.mean(camera_centers, axis=0)
+    scene_radius = np.max(np.linalg.norm(camera_centers - scene_center, axis=1))
+    
+    # Scale to fit in [-1, 1] range like Blender synthetic data (with 1.1x margin)
+    scale = 1.0 / (scene_radius * 1.1)
+    
+    print(f"  Original scene center: [{scene_center[0]:.2f}, {scene_center[1]:.2f}, {scene_center[2]:.2f}]")
+    print(f"  Original scene radius: {scene_radius:.2f}")
+    print(f"  Normalization scale: {scale:.4f}")
+    print(f"  Normalized range: approximately [-1, 1]")
+    
+    # Second pass: normalize and convert poses
+    print(f"\nNormalizing and converting camera poses...")
     image_data = []
     camera_id = 1
     
-    for idx, npz_file in enumerate(tqdm(selected_npz_files)):
-        npz_path = os.path.join(images_dir, npz_file)
+    for idx, (npz_file, pose_c2w) in enumerate(zip(tqdm(selected_npz_files), all_poses)):
         image_name = npz_file.replace('.npz', '.png')
         
-        # Read camera data
-        data = np.load(npz_path)
-        pose_c2w = data['camera_pose']
+        # Normalize: translate to origin, then scale
+        pose_c2w_normalized = pose_c2w.copy()
+        pose_c2w_normalized[:3, 3] = (pose_c2w[:3, 3] - scene_center) * scale
         
-        # Convert C2W to W2C
-        pose_w2c = np.linalg.inv(pose_c2w)
+        # Convert normalized C2W to W2C
+        pose_w2c = np.linalg.inv(pose_c2w_normalized)
         R_w2c = pose_w2c[:3, :3]
         t_w2c = pose_w2c[:3, 3]
         
