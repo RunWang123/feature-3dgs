@@ -56,7 +56,7 @@ def load_scannet_depth(depth_path):
     
     return torch.from_numpy(depth_array).float()
 
-def readDepthMaps(pred_depth_dir, gt_depth_dir=None, json_split_path=None, case_id=None):
+def readDepthMaps(pred_depth_dir, gt_depth_dir=None, json_split_path=None, case_id=None, use_train_views=False):
     """
     Read predicted depth maps and optionally ground truth depth maps.
     Supports .npy, .pt, and PNG (ScanNet) formats.
@@ -65,7 +65,8 @@ def readDepthMaps(pred_depth_dir, gt_depth_dir=None, json_split_path=None, case_
         pred_depth_dir: Directory containing predicted depth maps
         gt_depth_dir: Optional directory containing ground truth depth maps
         json_split_path: Optional JSON split file to map indices to frame IDs
-        case_id: Optional case ID to get correct test views
+        case_id: Optional case ID to get correct views
+        use_train_views: If True, use ref_views (training); if False, use target_views (test)
         
     Returns:
         pred_depths: List of predicted depth tensors
@@ -98,12 +99,18 @@ def readDepthMaps(pred_depth_dir, gt_depth_dir=None, json_split_path=None, case_
             if scene_name and 'scenes' in split_data and scene_name in split_data['scenes']:
                 cases = split_data['scenes'][scene_name]
                 if case_id < len(cases):
-                    # Use 'target_views' (test images), not 'test'
-                    test_views = cases[case_id].get('target_views', [])
+                    # Use 'ref_views' for training depth or 'target_views' for test
+                    if use_train_views:
+                        views = cases[case_id].get('ref_views', [])
+                        view_type = "ref_views (training)"
+                    else:
+                        views = cases[case_id].get('target_views', [])
+                        view_type = "target_views (test)"
+                    
                     # Create mapping: sequential index -> frame name (without extension)
-                    frame_id_mapping = {i: test_views[i] for i in range(len(test_views))}
+                    frame_id_mapping = {i: views[i] for i in range(len(views))}
                     print(f"  Using frame ID mapping from JSON split (case {case_id})")
-                    print(f"  Test views: {test_views}")
+                    print(f"  {view_type}: {views}")
         except Exception as e:
             print(f"  Warning: Could not load JSON split: {e}")
     
@@ -324,97 +331,105 @@ def evaluate(model_paths, eval_depth=False, gt_depth_dir=None, min_depth=0.0, ma
                                                             "PSNR": {name: psnr for psnr, name in zip(torch.tensor(psnrs).tolist(), image_names)},
                                                             "LPIPS": {name: lp for lp, name in zip(torch.tensor(lpipss).tolist(), image_names)}})
 
-                # Evaluate depth if requested
+                # Evaluate depth if requested (on TRAINING views)
                 if eval_depth:
-                    depth_raw_dir = method_dir / "depth_raw"
-                    if depth_raw_dir.exists():
-                        print("\n  Evaluating depth metrics...")
+                    # Look for depth in train directory, not test directory
+                    train_dir = Path(scene_dir) / "train"
+                    if train_dir.exists():
+                        train_method_dir = train_dir / method
+                        depth_raw_dir = train_method_dir / "depth_raw"
                         
-                        # Determine GT depth directory
-                        gt_depth_path = None
-                        if gt_depth_dir:
-                            gt_depth_path = Path(gt_depth_dir)
-                        
-                        pred_depths, gt_depths, depth_names = readDepthMaps(
-                            depth_raw_dir, gt_depth_path, 
-                            json_split_path=json_split_path, 
-                            case_id=case_id
-                        )
-                        
-                        if gt_depths is not None:
-                            # Compute depth metrics
-                            abs_rels = []
-                            tau_103s = []
-                            sq_rels = []
-                            rmses = []
-                            rmse_logs = []
-                            a1s = []
-                            a2s = []
-                            a3s = []
-                            depth_per_view = {}
+                        if depth_raw_dir.exists():
+                            print("\n  Evaluating depth metrics on TRAINING views...")
                             
-                            for pred_depth, gt_depth, depth_name in tqdm(zip(pred_depths, gt_depths, depth_names), 
-                                                                         total=len(pred_depths),
-                                                                         desc="Depth metrics"):
-                                if gt_depth is None:
-                                    continue
+                            # Determine GT depth directory
+                            gt_depth_path = None
+                            if gt_depth_dir:
+                                gt_depth_path = Path(gt_depth_dir)
+                            
+                            pred_depths, gt_depths, depth_names = readDepthMaps(
+                                depth_raw_dir, gt_depth_path, 
+                                json_split_path=json_split_path, 
+                                case_id=case_id,
+                                use_train_views=True  # Use training views for depth
+                            )
+                            
+                            if gt_depths is not None:
+                                # Compute depth metrics
+                                abs_rels = []
+                                tau_103s = []
+                                sq_rels = []
+                                rmses = []
+                                rmse_logs = []
+                                a1s = []
+                                a2s = []
+                                a3s = []
+                                depth_per_view = {}
+                                
+                                for pred_depth, gt_depth, depth_name in tqdm(zip(pred_depths, gt_depths, depth_names), 
+                                                                             total=len(pred_depths),
+                                                                             desc="Depth metrics"):
+                                    if gt_depth is None:
+                                        continue
+                                        
+                                    metrics = compute_depth_metrics(pred_depth, gt_depth, 
+                                                                   min_depth=min_depth, max_depth=max_depth,
+                                                                   use_scale_alignment=True)  # LSM uses scale alignment
+                                    if metrics is not None:
+                                        abs_rels.append(metrics['abs_rel'])
+                                        tau_103s.append(metrics['tau_103'])
+                                        sq_rels.append(metrics['sq_rel'])
+                                        rmses.append(metrics['rmse'])
+                                        rmse_logs.append(metrics['rmse_log'])
+                                        a1s.append(metrics['a1'])
+                                        a2s.append(metrics['a2'])
+                                        a3s.append(metrics['a3'])
+                                        depth_per_view[depth_name] = metrics
+                                
+                                if abs_rels:
+                                    # Compute mean metrics
+                                    mean_abs_rel = np.mean(abs_rels)
+                                    mean_tau_103 = np.mean(tau_103s)
+                                    mean_sq_rel = np.mean(sq_rels)
+                                    mean_rmse = np.mean(rmses)
+                                    mean_rmse_log = np.mean(rmse_logs)
+                                    mean_a1 = np.mean(a1s)
+                                    mean_a2 = np.mean(a2s)
+                                    mean_a3 = np.mean(a3s)
                                     
-                                metrics = compute_depth_metrics(pred_depth, gt_depth, 
-                                                               min_depth=min_depth, max_depth=max_depth,
-                                                               use_scale_alignment=True)  # LSM uses scale alignment
-                                if metrics is not None:
-                                    abs_rels.append(metrics['abs_rel'])
-                                    tau_103s.append(metrics['tau_103'])
-                                    sq_rels.append(metrics['sq_rel'])
-                                    rmses.append(metrics['rmse'])
-                                    rmse_logs.append(metrics['rmse_log'])
-                                    a1s.append(metrics['a1'])
-                                    a2s.append(metrics['a2'])
-                                    a3s.append(metrics['a3'])
-                                    depth_per_view[depth_name] = metrics
-                            
-                            if abs_rels:
-                                # Compute mean metrics
-                                mean_abs_rel = np.mean(abs_rels)
-                                mean_tau_103 = np.mean(tau_103s)
-                                mean_sq_rel = np.mean(sq_rels)
-                                mean_rmse = np.mean(rmses)
-                                mean_rmse_log = np.mean(rmse_logs)
-                                mean_a1 = np.mean(a1s)
-                                mean_a2 = np.mean(a2s)
-                                mean_a3 = np.mean(a3s)
-                                
-                                print(f"\n  === LSM/DUSt3R Metrics (with scale alignment) ===")
-                                print(f"  Abs Rel (rel) : {mean_abs_rel:>12.7f}")
-                                print(f"  Inlier τ<1.03 : {mean_tau_103:>12.7f}")
-                                print(f"\n  === Additional Metrics ===")
-                                print(f"  Sq Rel        : {mean_sq_rel:>12.7f}")
-                                print(f"  RMSE          : {mean_rmse:>12.7f}")
-                                print(f"  RMSE log      : {mean_rmse_log:>12.7f}")
-                                print(f"  δ < 1.25      : {mean_a1:>12.7f}")
-                                print(f"  δ < 1.25²     : {mean_a2:>12.7f}")
-                                print(f"  δ < 1.25³     : {mean_a3:>12.7f}")
-                                
-                                # Add to full dict (prioritize LSM metrics)
-                                full_dict[scene_dir][method].update({
-                                    "depth_abs_rel": mean_abs_rel,
-                                    "depth_tau_103": mean_tau_103,
-                                    "depth_sq_rel": mean_sq_rel,
-                                    "depth_rmse": mean_rmse,
-                                    "depth_rmse_log": mean_rmse_log,
-                                    "depth_a1": mean_a1,
-                                    "depth_a2": mean_a2,
-                                    "depth_a3": mean_a3
-                                })
-                                
-                                # Add to per-view dict
-                                per_view_dict[scene_dir][method]["depth_metrics"] = depth_per_view
+                                    print(f"\n  === LSM/DUSt3R Metrics (with scale alignment) ===")
+                                    print(f"  Abs Rel (rel) : {mean_abs_rel:>12.7f}")
+                                    print(f"  Inlier τ<1.03 : {mean_tau_103:>12.7f}")
+                                    print(f"\n  === Additional Metrics ===")
+                                    print(f"  Sq Rel        : {mean_sq_rel:>12.7f}")
+                                    print(f"  RMSE          : {mean_rmse:>12.7f}")
+                                    print(f"  RMSE log      : {mean_rmse_log:>12.7f}")
+                                    print(f"  δ < 1.25      : {mean_a1:>12.7f}")
+                                    print(f"  δ < 1.25²     : {mean_a2:>12.7f}")
+                                    print(f"  δ < 1.25³     : {mean_a3:>12.7f}")
+                                    
+                                    # Add to full dict (prioritize LSM metrics)
+                                    full_dict[scene_dir][method].update({
+                                        "depth_abs_rel": mean_abs_rel,
+                                        "depth_tau_103": mean_tau_103,
+                                        "depth_sq_rel": mean_sq_rel,
+                                        "depth_rmse": mean_rmse,
+                                        "depth_rmse_log": mean_rmse_log,
+                                        "depth_a1": mean_a1,
+                                        "depth_a2": mean_a2,
+                                        "depth_a3": mean_a3
+                                    })
+                                    
+                                    # Add to per-view dict
+                                    per_view_dict[scene_dir][method]["depth_metrics"] = depth_per_view
+                                else:
+                                    print("  No valid depth metrics computed")
                             else:
-                                print("  No valid depth metrics computed")
+                                print("  GT depth directory not provided, skipping depth evaluation")
                         else:
-                            print("  GT depth directory not provided, skipping depth evaluation")
+                            print(f"  Depth directory not found: {depth_raw_dir}")
                     else:
-                        print(f"  Depth directory not found: {depth_raw_dir}")
+                        print(f"  Train directory not found: {train_dir}")
                 
                 print("")
 
