@@ -156,6 +156,12 @@ def compute_segmentation(args):
             print("Please provide --scene_data_path pointing to the original scene data with labels/ folder")
             continue
         
+        # Check GT labels
+        gt_label_files = sorted([f for f in os.listdir(gt_labels_path) if f.endswith('.png')])
+        print(f"Found {len(gt_label_files)} GT label files")
+        if len(gt_label_files) > 0:
+            print(f"Sample GT label files: {gt_label_files[:3]}")
+        
         # Get feature files
         feature_files = sorted([f for f in os.listdir(feature_path) if f.endswith('_fmap_CxHxW.pt')])
         
@@ -164,6 +170,7 @@ def compute_segmentation(args):
             continue
         
         print(f"Found {len(feature_files)} views to evaluate")
+        print(f"Sample feature files: {feature_files[:3]}")
         
         # Reset metrics
         miou_metric.reset()
@@ -171,8 +178,21 @@ def compute_segmentation(args):
         
         # Process each view
         for feature_file in tqdm(feature_files, desc=f"Evaluating {split_name}"):
-            # Extract frame ID (e.g., "rgb_000000_fmap_CxHxW.pt" -> "000000")
-            frame_id = feature_file.split('_')[1]
+            # Extract frame ID from feature filename
+            # Patterns: "rgb_000000_fmap_CxHxW.pt" -> "000000"
+            #           "000000_fmap_CxHxW.pt" -> "000000"
+            parts = feature_file.replace('_fmap_CxHxW.pt', '').split('_')
+            
+            # Try to find the numeric ID
+            frame_id = None
+            for part in parts:
+                if part.isdigit():
+                    frame_id = part
+                    break
+            
+            if frame_id is None:
+                print(f"Warning: Could not extract frame ID from: {feature_file}")
+                continue
             
             # Load feature
             feature = torch.load(os.path.join(feature_path, feature_file))
@@ -181,7 +201,7 @@ def compute_segmentation(args):
             # Load corresponding GT label
             label_file = os.path.join(gt_labels_path, f"{frame_id}.png")
             if not os.path.exists(label_file):
-                print(f"Warning: GT label not found: {label_file}")
+                print(f"Warning: GT label not found: {label_file} (from feature: {feature_file})")
                 continue
             
             # Get feature size for resizing label
