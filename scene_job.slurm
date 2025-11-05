@@ -1,11 +1,15 @@
 #!/bin/bash
-#SBATCH --job-name=feature3dgs
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
-#SBATCH --gres=gpu:1
+#SBATCH -J feature-3dgs-scene-processing
+#SBATCH -p mri2020
 #SBATCH --time=24:00:00
-#SBATCH --partition=gpu
+#SBATCH --nodes=1                     # 1 nodes for mini dataset
+#SBATCH --ntasks-per-node=1           # 1 GPUs per node
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=100gb                   # Reduced memory
+#SBATCH --gpus-per-node=a100:1        # 1 A100 GPUs
+#SBATCH -o /scratch/runw/project/colmap/work_dirs/palmetto_log/slurm_%j.out
+#SBATCH -e /scratch/runw/project/colmap/work_dirs/palmetto_log/slurm_%j.err
+
 
 # ============================================================================
 # SLURM Job Template for Feature-3DGS Scene Processing
