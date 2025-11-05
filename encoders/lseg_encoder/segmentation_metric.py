@@ -417,7 +417,8 @@ class FeatureImageFolderLoader(enc_ds.ADE20KSegmentation):#(torch.utils.data.Dat
 
         self.student_features = get_folder_features(student_feature_root)
         if eval_mode == 'test':
-            self.teacher_features = get_gttest_folder_features(teacher_feature_root)
+            # Use regular get_folder_features for teacher (LSeg features don't have rgb_ prefix)
+            self.teacher_features = get_folder_features(teacher_feature_root)
             # self.gt_labels_path = get_gt_label_test(gt_label_root)
             # print("!!!!!!!!!!!!!gt_labels_path!!!!!!!!!!!!!!", self.gt_labels_path)
             # print("!!!!!!!!!!!!!teacher_features!!!!!!!!!!!!!!", self.teacher_features)
