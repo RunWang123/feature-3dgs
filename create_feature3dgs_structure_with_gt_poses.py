@@ -196,10 +196,10 @@ def process_scene(scene_path, output_path, target_size=448, num_images=30):
             'image_name': image_name
         })
     
-    # Write COLMAP files
+    # Write COLMAP files (skip points3D - let training code generate random initialization)
     write_cameras_txt(output_sparse_dir, fx_new, fy_new, cx_new, cy_new, target_size)
     write_images_txt(output_sparse_dir, image_data)
-    write_points3d_txt(output_sparse_dir)
+    # Don't write points3D files - training will auto-generate random initialization
     
     # Generate binary files (optional but matches feature3dgs structure)
     print(f"\nGenerating COLMAP binary files...")
@@ -217,7 +217,8 @@ def process_scene(scene_path, output_path, target_size=448, num_images=30):
     if os.path.exists(output_depths_dir):
         depth_count = len([f for f in os.listdir(output_depths_dir)])
         print(f"    ├── depths/         ({depth_count} depth files)")
-    print(f"    └── sparse/0/       (cameras.txt, images.txt, points3D.txt + .bin)")
+    print(f"    └── sparse/0/       (cameras.txt, images.txt)")
+    print(f"                        (points3D will be auto-generated during training)")
     print(f"{'='*70}\n")
     
     return True
@@ -247,11 +248,11 @@ def write_images_txt(output_dir, image_data):
 
 
 def write_points3d_txt(output_dir):
-    """Write empty COLMAP points3D.txt"""
-    with open(os.path.join(output_dir, 'points3D.txt'), 'w') as f:
-        f.write("# 3D point list with one line of data per point:\n")
-        f.write("#   POINT3D_ID, X, Y, Z, R, G, B, ERROR, TRACK[] as (IMAGE_ID, POINT2D_IDX)\n")
-        f.write("# Number of points: 0, mean track length: 0\n")
+    """
+    DEPRECATED - Don't write empty points3D file.
+    Training code will detect missing file and auto-generate random initialization.
+    """
+    pass
 
 
 def generate_colmap_binary(sparse_dir):
