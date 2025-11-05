@@ -183,7 +183,7 @@ def readDepthMaps(pred_depth_dir, gt_depth_dir=None, json_split_path=None, case_
     
     return pred_depths, gt_depths, depth_names
 
-def compute_depth_metrics(pred, gt, min_depth=0.0, max_depth=float('inf'), use_scale_alignment=True):
+def compute_depth_metrics(pred, gt, min_depth=0.1, max_depth=100.0, use_scale_alignment=True):
     """
     Compute depth evaluation metrics following LSM paper and DUSt3R.
     
@@ -202,13 +202,17 @@ def compute_depth_metrics(pred, gt, min_depth=0.0, max_depth=float('inf'), use_s
     Args:
         pred: Predicted depth map (H, W)
         gt: Ground truth depth map (H, W)
-        min_depth: Minimum valid depth (default 0.0, matching LSM's depth > 0 filter)
-        max_depth: Maximum valid depth (default inf, matching LSM's no upper limit)
+        min_depth: Minimum valid depth (default 0.1m, per LSM paper)
+        max_depth: Maximum valid depth (default 100m, per LSM paper)
         use_scale_alignment: If True, apply median normalization for scale alignment (LSM/DUSt3R)
         
     Returns:
         dict: Dictionary of computed metrics
     """
+    # Clip depth to valid range (LSM paper: "depth estimates are clipped to a range of 0.1 m to 100 m")
+    pred = torch.clamp(pred, min_depth, max_depth)
+    gt = torch.clamp(gt, min_depth, max_depth)
+    
     # Create valid mask
     valid_mask = (gt > min_depth) & (gt < max_depth) & torch.isfinite(gt) & torch.isfinite(pred)
     valid_mask = valid_mask & (pred > 0)
@@ -218,9 +222,6 @@ def compute_depth_metrics(pred, gt, min_depth=0.0, max_depth=float('inf'), use_s
     
     pred = pred[valid_mask]
     gt = gt[valid_mask]
-    
-    # Clamp predictions to valid range
-    pred = torch.clamp(pred, min_depth, max_depth)
     
     # Scale alignment using median normalization (following LSM/DUSt3R)
     if use_scale_alignment:
@@ -268,18 +269,19 @@ def compute_depth_metrics(pred, gt, min_depth=0.0, max_depth=float('inf'), use_s
     a2 = (thresh < 1.25 ** 2).float().mean()
     a3 = (thresh < 1.25 ** 3).float().mean()
     
+    # Return metrics (LSM paper reports rel and tau as percentages)
     return {
-        'abs_rel': abs_rel.item(),
-        'tau_103': tau_103.item(),  # LSM inlier ratio
+        'abs_rel': abs_rel.item() * 100.0,  # Convert to percent (LSM format)
+        'tau_103': tau_103.item() * 100.0,  # Convert to percent (LSM format)
         'sq_rel': sq_rel.item(),
         'rmse': rmse.item(),
         'rmse_log': rmse_log.item(),
-        'a1': a1.item(),
-        'a2': a2.item(),
-        'a3': a3.item()
+        'a1': a1.item() * 100.0,  # Convert to percent for consistency
+        'a2': a2.item() * 100.0,  # Convert to percent for consistency
+        'a3': a3.item() * 100.0   # Convert to percent for consistency
     }
 
-def evaluate(model_paths, eval_depth=False, gt_depth_dir=None, min_depth=0.0, max_depth=float('inf'), 
+def evaluate(model_paths, eval_depth=False, gt_depth_dir=None, min_depth=0.1, max_depth=100.0, 
              json_split_path=None, case_id=None):
 
     full_dict = {}
@@ -398,15 +400,15 @@ def evaluate(model_paths, eval_depth=False, gt_depth_dir=None, min_depth=0.0, ma
                                     mean_a3 = np.mean(a3s)
                                     
                                     print(f"\n  === LSM/DUSt3R Metrics (with scale alignment) ===")
-                                    print(f"  Abs Rel (rel) : {mean_abs_rel:>12.7f}")
-                                    print(f"  Inlier τ<1.03 : {mean_tau_103:>12.7f}")
+                                    print(f"  Abs Rel (rel) : {mean_abs_rel:>12.4f}%")
+                                    print(f"  Inlier τ<1.03 : {mean_tau_103:>12.4f}%")
                                     print(f"\n  === Additional Metrics ===")
                                     print(f"  Sq Rel        : {mean_sq_rel:>12.7f}")
-                                    print(f"  RMSE          : {mean_rmse:>12.7f}")
+                                    print(f"  RMSE          : {mean_rmse:>12.4f} m")
                                     print(f"  RMSE log      : {mean_rmse_log:>12.7f}")
-                                    print(f"  δ < 1.25      : {mean_a1:>12.7f}")
-                                    print(f"  δ < 1.25²     : {mean_a2:>12.7f}")
-                                    print(f"  δ < 1.25³     : {mean_a3:>12.7f}")
+                                    print(f"  δ < 1.25      : {mean_a1:>12.4f}%")
+                                    print(f"  δ < 1.25²     : {mean_a2:>12.4f}%")
+                                    print(f"  δ < 1.25³     : {mean_a3:>12.4f}%")
                                     
                                     # Add to full dict (prioritize LSM metrics)
                                     full_dict[scene_dir][method].update({
@@ -452,10 +454,10 @@ if __name__ == "__main__":
                        help="Enable depth metrics evaluation")
     parser.add_argument('--gt_depth_dir', type=str, default=None,
                        help="Path to ground truth depth directory (required for depth evaluation)")
-    parser.add_argument('--min_depth', type=float, default=0.0,
-                       help="Minimum valid depth value (default: 0.0, matching LSM)")
-    parser.add_argument('--max_depth', type=float, default=float('inf'),
-                       help="Maximum valid depth value (default: inf, matching LSM)")
+    parser.add_argument('--min_depth', type=float, default=0.1,
+                       help="Minimum valid depth value (default: 0.1m per LSM paper)")
+    parser.add_argument('--max_depth', type=float, default=100.0,
+                       help="Maximum valid depth value (default: 100m per LSM paper)")
     parser.add_argument('--json_split_path', type=str, default=None,
                        help="Path to JSON split file for mapping test view indices to frame IDs")
     parser.add_argument('--case_id', type=int, default=None,
