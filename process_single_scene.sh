@@ -4,7 +4,9 @@
 # Usage: bash process_single_scene.sh <scene_name> <json_split_path> <data_base_dir> <output_base_dir>
 #
 
-set -e  # Exit on error
+# NOTE: We don't use 'set -e' here so that if one case fails,
+# we continue processing other cases. Individual critical errors
+# (like missing data directory) will still cause early exit.
 
 # ============================================================================
 # Configuration
@@ -181,6 +183,10 @@ for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
     echo "Log file: ${CASE_LOG}"
     echo ""
     
+    # Track if this case has any errors (use file to avoid subshell issues)
+    CASE_STATUS_FILE="${CASE_OUTPUT_DIR}/.case_status"
+    echo "0" > "${CASE_STATUS_FILE}"  # 0 = success, 1 = failed
+    
     {
         echo "Starting case ${CASE_ID} at $(date)"
         
@@ -212,8 +218,8 @@ for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
         TRAIN_STATUS=$?
         if [ ${TRAIN_STATUS} -ne 0 ]; then
             echo "❌ Training failed for case ${CASE_ID}"
-            FAILED_CASES=$((FAILED_CASES + 1))
-            continue
+            echo "1" > "${CASE_STATUS_FILE}"  # Mark as failed
+            exit 1  # Exit subshell to skip remaining steps
         fi
         
         echo "✅ Training completed"
@@ -469,9 +475,18 @@ for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
         echo "Case ${CASE_ID} completed at $(date)"
         echo "========================================="
         
-        SUCCESSFUL_CASES=$((SUCCESSFUL_CASES + 1))
-        
     } 2>&1 | tee "${CASE_LOG}"
+    
+    # Check if case succeeded (read status from file to handle subshell)
+    CASE_STATUS=$(cat "${CASE_STATUS_FILE}" 2>/dev/null || echo "1")
+    if [ "${CASE_STATUS}" = "0" ]; then
+        SUCCESSFUL_CASES=$((SUCCESSFUL_CASES + 1))
+        echo "✅ Case ${CASE_ID}: SUCCESS"
+    else
+        FAILED_CASES=$((FAILED_CASES + 1))
+        echo "❌ Case ${CASE_ID}: FAILED (check log: ${CASE_LOG})"
+    fi
+    echo ""
     
 done
 
