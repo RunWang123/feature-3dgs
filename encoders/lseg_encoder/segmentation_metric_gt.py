@@ -114,58 +114,50 @@ def compute_segmentation(args):
     print(f"Using {len(labelset)} semantic labels + background")
     print(f"Labels: {labelset}")
     
-    # Load LSeg checkpoint to get proper text encoder (512-dim)
-    print("Loading LSeg checkpoint for text encoding...")
-    checkpoint = torch.load(args.weights, map_location='cpu')
+    # Load LSeg model to get proper text encoder (EXACT same as LSM)
+    print("Loading LSeg model for text encoding (following LSM approach)...")
+    from modules.lseg_module import LSegModule
     
-    # Load CLIP model and get text features
-    clip_model, _ = clip.load("ViT-L/14@336px", device=device, jit=False)
+    # Load LSeg module the same way LSM does
+    lseg_module = LSegModule.load_from_checkpoint(
+        checkpoint_path=args.weights,
+        data_path=None,
+        dataset='ade20k',
+        backbone='clip_vitl16_384',
+        aux=False,
+        num_features=256,
+        aux_weight=0,
+        se_loss=False,
+        se_weight=0,
+        base_lr=0,
+        batch_size=1,
+        max_epochs=0,
+        ignore_index=-1,
+        dropout=0.0,
+        scale_inv=False,
+        augment=False,
+        no_batchnorm=False,
+        widehead=True,
+        widehead_hr=False,
+        map_locatin="cpu",
+        arch_option=0,
+        strict=False,  # Don't fail on missing keys
+        block_depth=0,
+        activation='lrelu',
+    )
+    lseg_module.eval()
+    lseg_module = lseg_module.to(device)
     
-    # Encode text
+    # Encode text using LSeg's clip_pretrained (EXACT same as LSM lseg.py line 86-90)
     text = clip.tokenize(labelset).to(device)
     with torch.no_grad():
-        text_features_768 = clip_model.encode_text(text).float()
+        text_features = lseg_module.net.clip_pretrained.encode_text(text)
     
-    # Project to 512-dim using LSeg's projection (from checkpoint)
-    # LSeg uses a linear layer to project 768 -> 512
-    # This should be in the checkpoint under 'state_dict'
-    try:
-        # Try to load the text projection layer from checkpoint
-        if 'state_dict' in checkpoint:
-            state_dict = checkpoint['state_dict']
-        else:
-            state_dict = checkpoint
-        
-        # Find the clip text projection weights
-        # In LSeg, this is typically model.clip_pretrained.model.text_projection
-        text_proj_weight = None
-        for key in state_dict.keys():
-            if 'text_projection' in key:
-                text_proj_weight = state_dict[key]
-                break
-        
-        if text_proj_weight is not None and text_proj_weight.shape[0] == 512:
-            print(f"Found text projection: {text_proj_weight.shape}")
-            text_proj = text_proj_weight.to(device)
-            # Apply projection: (batch, 768) @ (768, 512) -> (batch, 512)
-            text_features = text_features_768 @ text_proj
-        else:
-            # Fallback: Use simple linear projection
-            print("Using fallback linear projection 768->512")
-            proj_layer = nn.Linear(768, 512, bias=False).to(device)
-            nn.init.xavier_uniform_(proj_layer.weight)
-            text_features = proj_layer(text_features_768)
-    except Exception as e:
-        print(f"Warning: Could not load text projection from checkpoint: {e}")
-        print("Using fallback linear projection 768->512")
-        proj_layer = nn.Linear(768, 512, bias=False).to(device)
-        nn.init.xavier_uniform_(proj_layer.weight)
-        text_features = proj_layer(text_features_768)
-    
-    # Logit scale (EXACT same as LSM)
-    logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07)).exp().to(device)
+    # Get logit scale from LSeg model (EXACT same as LSM lseg.py line 88)
+    logit_scale = lseg_module.net.logit_scale.to(device)
     
     print(f"Text features shape: {text_features.shape}")
+    print(f"Logit scale: {logit_scale.item():.4f}")
     
     # Setup label remapping
     if args.label_mapping_file:
@@ -343,12 +335,13 @@ def compute_segmentation(args):
             # Reshape: (C, H, W) -> (H, W, C) -> (H*W, C)
             image_features = feature.permute(1, 2, 0).reshape(-1, c)
             
-            # Normalize features (EXACT same as LSM)
+            # Normalize features (EXACT same as LSM lseg.py line 94-95)
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)
             text_features_norm = text_features / text_features.norm(dim=-1, keepdim=True)
             
-            # Compute logits with scale (EXACT same as LSM)
-            logits_per_image = logit_scale * image_features.half() @ text_features_norm.t()
+            # Compute logits with scale (EXACT same as LSM lseg.py line 97)
+            # Convert both to half precision for consistency
+            logits_per_image = logit_scale * image_features.half() @ text_features_norm.half().t()
             
             # Reshape back: (H*W, num_labels) -> (H, W, num_labels) -> (num_labels, H, W)
             logits = logits_per_image.float().view(h, w, -1).permute(2, 0, 1)
