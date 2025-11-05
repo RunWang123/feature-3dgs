@@ -116,11 +116,9 @@ def compute_segmentation(args):
     
     # Load LSeg checkpoint to get proper text encoder (512-dim)
     print("Loading LSeg checkpoint for text encoding...")
-    import torch
     checkpoint = torch.load(args.weights, map_location='cpu')
     
     # Load CLIP model and get text features
-    import clip
     clip_model, _ = clip.load("ViT-L/14@336px", device=device, jit=False)
     
     # Encode text
