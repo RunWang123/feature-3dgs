@@ -73,13 +73,26 @@ echo ""
 # Run Processing Script
 # ============================================================================
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Use SLURM_SUBMIT_DIR (directory where sbatch was called) instead of BASH_SOURCE
+# because sbatch copies the script to a temp location
+if [ -z "${SLURM_SUBMIT_DIR}" ]; then
+    # Fallback if not running under SLURM (shouldn't happen)
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+    SCRIPT_DIR="${SLURM_SUBMIT_DIR}"
+fi
+
 PROCESS_SCRIPT="${SCRIPT_DIR}/process_single_scene.sh"
 
 if [ ! -f "${PROCESS_SCRIPT}" ]; then
     echo "❌ Error: Processing script not found: ${PROCESS_SCRIPT}"
+    echo "   SLURM_SUBMIT_DIR: ${SLURM_SUBMIT_DIR}"
+    echo "   SCRIPT_DIR: ${SCRIPT_DIR}"
     exit 1
 fi
+
+echo "Using processing script: ${PROCESS_SCRIPT}"
+echo ""
 
 echo "========================================"
 echo "Starting Scene Processing"
