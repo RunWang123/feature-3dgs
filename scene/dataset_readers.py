@@ -155,10 +155,20 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, semantic_fe
 
         image_path = os.path.join(images_folder, os.path.basename(extr.name))
         image_name = os.path.basename(image_path).split(".")[0]
+        
+        # Check if image exists
+        if not os.path.exists(image_path):
+            print(f"Warning: Image not found: {image_path}, skipping camera {uid}")
+            continue
+            
         image = Image.open(image_path) 
 
-        
+        # Check if semantic feature exists
         semantic_feature_path = os.path.join(semantic_feature_folder, image_name) + '_fmap_CxHxW.pt' 
+        if not os.path.exists(semantic_feature_path):
+            print(f"Warning: LSeg feature not found: {semantic_feature_path}, skipping camera {uid}")
+            continue
+            
         semantic_feature_name = os.path.basename(semantic_feature_path).split(".")[0]
         semantic_feature = torch.load(semantic_feature_path) 
 
@@ -252,6 +262,23 @@ def readColmapSceneInfo(path, foundation_model, images, eval, llffhold=8, json_s
             
             print(f"  Loaded train: {len(train_cam_infos)}")
             print(f"  Loaded test:  {len(test_cam_infos)}")
+            
+            # Debug output if no cameras loaded
+            if len(train_cam_infos) == 0 and len(test_cam_infos) == 0:
+                print(f"  ⚠️  WARNING: No cameras matched JSON split!")
+                available_names = [os.path.splitext(cam.image_name)[0] for cam in cam_infos]
+                print(f"  Expected train frames: {sorted(list(train_names))[:10]}")
+                print(f"  Expected test frames: {sorted(list(test_names))[:10]}")
+                print(f"  Available frames: {sorted(list(available_names))[:10]}")
+            
+            # Validate that we loaded at least some cameras
+            if len(train_cam_infos) == 0:
+                raise ValueError(
+                    f"No training cameras loaded for case {case_id}! "
+                    f"This usually means the frame names in the JSON split don't match "
+                    f"the actual image/feature files in the scene directory. "
+                    f"Check {path}/images/ and {path}/rgb_feature_langseg/"
+                )
         else:
             # Use default llffhold split
             train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 2] # avoid 1st to be test view
@@ -261,6 +288,12 @@ def readColmapSceneInfo(path, foundation_model, images, eval, llffhold=8, json_s
     else:
         train_cam_infos = cam_infos
         test_cam_infos = []
+
+    # Final validation: ensure we have training cameras
+    if len(train_cam_infos) == 0:
+        raise ValueError(
+            f"No training cameras available! Cannot train 3DGS without any training views."
+        )
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 
