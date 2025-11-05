@@ -70,6 +70,11 @@ def load_and_remap_label(label_path, remap_fn, target_size=None):
     """
     Load a label image and remap to target label space.
     
+    CRITICAL: Follows LSM's exact approach (testdata.py lines 125-137):
+    1. Load raw label (ScanNet IDs like 1, 2, 3, 34, etc.)
+    2. Resize raw label with NEAREST interpolation
+    3. THEN remap to target classes [0-8]
+    
     Args:
         label_path: Path to label PNG file
         remap_fn: Remapping function from create_label_remapping()
@@ -78,18 +83,18 @@ def load_and_remap_label(label_path, remap_fn, target_size=None):
     Returns:
         Remapped label array (H, W) with values in [0, num_classes]
     """
-    # Load label image
+    # Load label image (raw ScanNet IDs)
     label_img = Image.open(label_path)
     label_array = np.array(label_img)
     
-    # Remap labels
-    remapped = remap_fn(label_array)
-    
-    # Resize if needed
+    # Resize FIRST if needed (EXACT same as LSM: resize BEFORE remapping)
     if target_size is not None:
-        label_pil = Image.fromarray(remapped.astype(np.uint8))
+        label_pil = Image.fromarray(label_array)  # Keep as raw IDs
         label_pil = label_pil.resize((target_size[1], target_size[0]), Image.NEAREST)
-        remapped = np.array(label_pil)
+        label_array = np.array(label_pil)
+    
+    # THEN remap labels (EXACT same as LSM: remap AFTER resizing)
+    remapped = remap_fn(label_array)
     
     return remapped
 
