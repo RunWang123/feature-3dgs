@@ -162,6 +162,24 @@ def compute_segmentation(args):
         if len(gt_label_files) > 0:
             print(f"Sample GT label files: {gt_label_files[:3]}")
         
+        # Load camera info to map feature indices to frame names
+        cameras_json = os.path.join(args.data, split_name, f"ours_{args.iteration}", "cameras.json")
+        index_to_frame = {}
+        if os.path.exists(cameras_json):
+            with open(cameras_json, 'r') as f:
+                cameras = json.load(f)
+            for idx, cam in enumerate(cameras):
+                img_name = cam.get('img_name', '')
+                # Extract frame ID from image name (e.g., "000010" from path or filename)
+                frame_id = os.path.splitext(os.path.basename(img_name))[0]
+                index_to_frame[idx] = frame_id
+            print(f"Loaded {len(index_to_frame)} camera mappings")
+            if len(index_to_frame) > 0:
+                print(f"Sample mappings: {list(index_to_frame.items())[:3]}")
+        else:
+            print(f"Warning: cameras.json not found at {cameras_json}")
+            print("Will try to match by padding frame IDs...")
+        
         # Get feature files
         feature_files = sorted([f for f in os.listdir(feature_path) if f.endswith('_fmap_CxHxW.pt')])
         
@@ -178,21 +196,34 @@ def compute_segmentation(args):
         
         # Process each view
         for feature_file in tqdm(feature_files, desc=f"Evaluating {split_name}"):
-            # Extract frame ID from feature filename
-            # Patterns: "rgb_000000_fmap_CxHxW.pt" -> "000000"
-            #           "000000_fmap_CxHxW.pt" -> "000000"
+            # Extract index from feature filename
+            # Patterns: "00000_fmap_CxHxW.pt" -> 0
+            #           "00001_fmap_CxHxW.pt" -> 1
             parts = feature_file.replace('_fmap_CxHxW.pt', '').split('_')
             
             # Try to find the numeric ID
-            frame_id = None
+            feature_idx = None
             for part in parts:
                 if part.isdigit():
-                    frame_id = part
+                    feature_idx = int(part)
                     break
             
-            if frame_id is None:
-                print(f"Warning: Could not extract frame ID from: {feature_file}")
+            if feature_idx is None:
+                print(f"Warning: Could not extract index from: {feature_file}")
                 continue
+            
+            # Map feature index to frame ID using cameras.json
+            if index_to_frame:
+                frame_id = index_to_frame.get(feature_idx)
+                if frame_id is None:
+                    print(f"Warning: No camera mapping for index {feature_idx}")
+                    continue
+            else:
+                # Fallback: try to pad the index to match label format
+                # Feature files use indices like 00000, 00001, labels use 000000, 000010
+                # This is likely wrong without camera mapping
+                frame_id = str(feature_idx).zfill(6)
+                print(f"Warning: No camera mapping, using padded index {frame_id} (likely incorrect)")
             
             # Load feature
             feature = torch.load(os.path.join(feature_path, feature_file))
