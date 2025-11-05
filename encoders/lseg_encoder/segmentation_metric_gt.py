@@ -23,6 +23,8 @@ import torch.nn.functional as F
 from PIL import Image
 from tqdm import tqdm
 import pandas as pd
+import json
+from datetime import datetime
 
 # Add paths for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -274,6 +276,33 @@ def compute_segmentation(args):
         print(f"mIoU:     {final_miou.item():.4f}")
         print(f"Accuracy: {final_accuracy.item():.4f}")
         print(f"{'='*60}\n")
+        
+        # Save results to file if output path is specified
+        if hasattr(args, 'output') and args.output:
+            results = {
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'model_path': args.data,
+                'scene_path': args.scene_data_path,
+                'iteration': args.iteration,
+                'split': split_name,
+                'labels': args.label_src,
+                'num_classes': num_classes,
+                'num_samples': len(feature_files),
+                'metrics': {
+                    'mIoU': float(final_miou.item()),
+                    'accuracy': float(final_accuracy.item())
+                }
+            }
+            
+            output_path = args.output
+            os.makedirs(os.path.dirname(output_path), exist_ok=True) if os.path.dirname(output_path) else None
+            
+            with open(output_path, 'w') as f:
+                json.dump(results, f, indent=2)
+            
+            print(f"✅ Results saved to: {output_path}")
+        
+        return final_miou.item(), final_accuracy.item()
 
 
 if __name__ == "__main__":
@@ -295,6 +324,8 @@ if __name__ == "__main__":
                        help='Which iteration to evaluate')
     parser.add_argument('--label_src', required=True, type=str,
                        help='Comma-separated semantic labels (e.g., "wall,floor,ceiling,chair,table,sofa,bed,other")')
+    parser.add_argument('--output', type=str, default=None,
+                       help='Path to save results JSON file (e.g., results/segmentation_metrics.json)')
     
     args = parser.parse_args()
     

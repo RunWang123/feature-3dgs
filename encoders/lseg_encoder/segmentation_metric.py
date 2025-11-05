@@ -38,6 +38,8 @@ import sklearn
 import sklearn.decomposition
 import time
 import re
+import json
+from datetime import datetime
 
 # python3 -u smetric_dff.py --backbone clip_vitl16_384 --weights demo_e200.ckpt --widehead --no-scaleinv --student-feature-dir ../../output/office4_128_op_2_05/test/ours_5000/saved_feature/ --teacher-feature-dir ../../data/office4/rgb_feature_langseg/ --test-rgb-dir ../../output/office4_128_op_2_05/test/ours_5000/renders/ --workers 0 --eval-mode test --ground-truth ../../output/office4_128_op_2_05/test/ours_5000/saved_feature
     
@@ -361,6 +363,12 @@ class Options:
             "--eval-mode",
             help="evaluation mode is either train or test",
             required=True,
+        )
+
+        parser.add_argument(
+            "--output",
+            help="Path to save results JSON file (e.g., results/segmentation_metrics.json)",
+            default=None,
         )
 
         # parser.add_argument(
@@ -862,6 +870,40 @@ def test(args):
 
             print(f'the average accuracy is {accuracy_accum/count}, average iou is {iou_accum/count}')
             # print("?????????????????????????????????????????????????????????????????????", mask_pred.shape)   #tensors([360, 480, 3])
+    
+    # Save final results to file if output path is specified
+    final_accuracy = accuracy_accum / count
+    final_iou = iou_accum / count
+    
+    print(f"\n{'='*60}")
+    print(f"Final Results:")
+    print(f"{'='*60}")
+    print(f"Average Accuracy: {final_accuracy:.4f}")
+    print(f"Average IoU:      {final_iou:.4f}")
+    print(f"{'='*60}\n")
+    
+    if hasattr(args, 'output') and args.output:
+        results = {
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'student_feature_dir': args.student_feature_dir,
+            'teacher_feature_dir': args.teacher_feature_dir,
+            'test_rgb_dir': args.test_rgb_dir,
+            'eval_mode': args.eval_mode,
+            'labels': args.label_src if hasattr(args, 'label_src') else 'default',
+            'num_samples': count,
+            'metrics': {
+                'accuracy': float(final_accuracy),
+                'iou': float(final_iou)
+            }
+        }
+        
+        output_path = args.output
+        os.makedirs(os.path.dirname(output_path), exist_ok=True) if os.path.dirname(output_path) else None
+        
+        with open(output_path, 'w') as f:
+            json.dump(results, f, indent=2)
+        
+        print(f"✅ Results saved to: {output_path}")
 
 
             # # # Visualize results with legend
