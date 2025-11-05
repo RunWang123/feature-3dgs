@@ -511,7 +511,13 @@ def compute_segmentation(args):
                 }
             }
             
+            # Create split-specific output path (e.g., *_gt_metrics_train.json, *_gt_metrics_test.json)
             output_path = args.output
+            if output_path.endswith('.json'):
+                output_path = output_path.replace('.json', f'_{split_name}.json')
+            else:
+                output_path = f"{output_path}_{split_name}.json"
+            
             os.makedirs(os.path.dirname(output_path), exist_ok=True) if os.path.dirname(output_path) else None
             
             with open(output_path, 'w') as f:

@@ -335,7 +335,7 @@ for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
         cd "${FEATURE_3DGS_DIR}" || exit 1
         
         # ----------------------------------------------------------------
-        # Step 7: Teacher-Student Metrics (all saved iterations)
+        # Step 7: Teacher-Student Metrics (all saved iterations, train + test)
         # ----------------------------------------------------------------
         echo ""
         echo "----------------------------------------"
@@ -348,10 +348,12 @@ for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
         
         mkdir -p "${CASE_OUTPUT_DIR}/results"
         
-        # Compute metrics for all saved iterations
+        # Compute metrics for all saved iterations and both splits
         for ITER in ${SAVE_ITERATIONS}; do
             echo "Computing Teacher-Student metrics for iteration ${ITER}..."
             
+            # Test split
+            echo "  - Test split..."
             python -u segmentation_metric.py \
                 --backbone clip_vitl16_384 \
                 --weights demo_e200.ckpt \
@@ -363,21 +365,52 @@ for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
                 --workers 0 \
                 --eval-mode test \
                 --label_src "${SEMANTIC_LABELS}" \
-                --output "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_iter${ITER}_teacher_student_metrics.json" \
+                --output "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_iter${ITER}_teacher_student_metrics_test.json" \
                 2>&1
             
-            TS_METRICS_STATUS=$?
-            if [ ${TS_METRICS_STATUS} -ne 0 ]; then
-                echo "⚠️  Teacher-Student metrics failed for iteration ${ITER}"
+            TEST_STATUS=$?
+            if [ ${TEST_STATUS} -ne 0 ]; then
+                echo "    ⚠️  Test split failed"
             else
-                echo "✅ Teacher-Student metrics iteration ${ITER} computed"
+                echo "    ✅ Test split completed"
+            fi
+            
+            # Train split
+            echo "  - Train split..."
+            python -u segmentation_metric.py \
+                --backbone clip_vitl16_384 \
+                --weights demo_e200.ckpt \
+                --widehead \
+                --no-scaleinv \
+                --student-feature-dir "${CASE_OUTPUT_DIR}/train/ours_${ITER}/saved_feature/" \
+                --teacher-feature-dir "${SCENE_DATA_DIR}/rgb_feature_langseg/" \
+                --test-rgb-dir "${CASE_OUTPUT_DIR}/train/ours_${ITER}/renders/" \
+                --workers 0 \
+                --eval-mode train \
+                --label_src "${SEMANTIC_LABELS}" \
+                --output "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_iter${ITER}_teacher_student_metrics_train.json" \
+                2>&1
+            
+            TRAIN_STATUS=$?
+            if [ ${TRAIN_STATUS} -ne 0 ]; then
+                echo "    ⚠️  Train split failed"
+            else
+                echo "    ✅ Train split completed"
+            fi
+            
+            # Overall status
+            if [ ${TEST_STATUS} -eq 0 ] && [ ${TRAIN_STATUS} -eq 0 ]; then
+                echo "✅ Teacher-Student metrics iteration ${ITER} completed (train + test)"
+            else
+                echo "⚠️  Teacher-Student metrics iteration ${ITER} partially failed"
             fi
         done
         
-        echo "✅ All Teacher-Student metrics computed"
+        echo "✅ All Teacher-Student metrics computed (train + test)"
         
         # ----------------------------------------------------------------
-        # Step 8: Ground Truth Metrics (all saved iterations)
+        # Step 8: Ground Truth Metrics (all saved iterations, train + test)
+        # Note: segmentation_metric_gt.py internally processes both splits
         # ----------------------------------------------------------------
         echo ""
         echo "----------------------------------------"
