@@ -220,20 +220,37 @@ def compute_segmentation(args):
             if 'scenes' in split_data and scene_name in split_data['scenes']:
                 scene_cases = split_data['scenes'][scene_name]
                 
-                # If case_id specified, use that case; otherwise use first case
-                if args.case_id >= 0 and args.case_id < len(scene_cases):
+                # ALIGNED with dataset_readers.py load_split_from_json():
+                # If case_id >= 0: use that specific case only
+                # If case_id == -1: collect from all cases
+                if args.case_id >= 0:
+                    if args.case_id >= len(scene_cases):
+                        raise ValueError(f"Case ID {args.case_id} out of range. Scene has {len(scene_cases)} cases (0-{len(scene_cases)-1})")
+                    
+                    # Use only the specified case
                     case = scene_cases[args.case_id]
+                    if split_name == 'test':
+                        frame_names = case.get('target_views', [])
+                    else:  # train
+                        frame_names = case.get('ref_views', [])
+                    
+                    print(f"  Using case {args.case_id} only (out of {len(scene_cases)} total cases)")
                 else:
-                    case = scene_cases[0]
-                    if args.case_id >= 0:
-                        print(f"Warning: case_id {args.case_id} not found, using case 0")
+                    # Collect from all cases
+                    frame_names = []
+                    for case in scene_cases:
+                        if split_name == 'test':
+                            if 'target_views' in case:
+                                frame_names.extend(case['target_views'])
+                        else:  # train
+                            if 'ref_views' in case:
+                                frame_names.extend(case['ref_views'])
+                    
+                    # Remove duplicates while preserving order
+                    frame_names = list(dict.fromkeys(frame_names))
+                    print(f"  Using all {len(scene_cases)} cases")
                 
-                # Map based on split
-                if split_name == 'test':
-                    frame_names = case.get('target_views', [])
-                else:  # train
-                    frame_names = case.get('ref_views', [])
-                
+                # Map frame names to indices
                 for idx, frame_name in enumerate(frame_names):
                     index_to_frame[idx] = frame_name
                 
