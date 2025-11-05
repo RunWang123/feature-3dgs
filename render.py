@@ -110,6 +110,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         #encoder_ckpt_path = os.path.join(model_path, "encoder_chkpnt{}.pth".format(iteration))
         decoder_ckpt_path = os.path.join(model_path, "decoder_chkpnt{}.pth".format(iteration))
         depth_path = os.path.join(model_path, name, "ours_{}".format(iteration), "depth") ###
+        depth_raw_path = os.path.join(model_path, name, "ours_{}".format(iteration), "depth_raw") ###
         
         if speedup:
             gt_feature_map = views[0].semantic_feature.cuda()
@@ -124,6 +125,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         makedirs(gt_feature_map_path, exist_ok=True)
         makedirs(saved_feature_path, exist_ok=True)
         makedirs(depth_path, exist_ok=True) ###
+        makedirs(depth_raw_path, exist_ok=True) ###
 
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         if edit_config != "no editing":
@@ -153,6 +155,15 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             
             ### depth ###
             depth = render_pkg["depth"]
+            
+            # Save raw depth values (before normalization)
+            depth_raw = depth.squeeze().cpu().numpy()  # Shape: (H, W)
+            np.save(os.path.join(depth_raw_path, '{0:05d}'.format(idx) + ".npy"), depth_raw)
+            
+            # Also save as .pt for PyTorch compatibility
+            torch.save(depth.cpu(), os.path.join(depth_raw_path, '{0:05d}'.format(idx) + ".pt"))
+            
+            # Save depth visualization (jet colormap)
             scale_nor = depth.max().item()
             depth_nor = depth / scale_nor
             depth_tensor_squeezed = depth_nor.squeeze()  # Remove the channel dimension
