@@ -153,17 +153,14 @@ cd "${FEATURE_3DGS_DIR}" || exit 1
 
 python -c "
 import timm
-try:
-    model = timm.create_model('vit_large_patch16_384.augreg_in21k_ft_in1k', pretrained=True)
-    print('✅ timm model available')
-except Exception as e:
-    print(f'⚠️  Error loading timm model: {e}')
-" || echo "⚠️  Warning: timm model check failed (will try again during segmentation)"
+model = timm.create_model('vit_large_patch16_384.augreg_in21k_ft_in1k', pretrained=True)
+print('✅ Model downloaded successfully!')
+" || echo "⚠️  Warning: timm model download failed (will try again during segmentation)"
 
 echo ""
 
 # ============================================================================
-# Step 3-7: Process each case
+# Step 3-8: Process each case
 # ============================================================================
 
 SUCCESSFUL_CASES=0
@@ -299,6 +296,102 @@ for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
             echo "⚠️  Segmentation failed for case ${CASE_ID}"
         else
             echo "✅ Segmentation completed"
+        fi
+        
+        # Return to feature-3dgs root
+        cd "${FEATURE_3DGS_DIR}" || exit 1
+        
+        # ----------------------------------------------------------------
+        # Step 7: Teacher-Student Metrics
+        # ----------------------------------------------------------------
+        echo ""
+        echo "----------------------------------------"
+        echo "Step 7: Teacher-Student Metrics (Case ${CASE_ID})"
+        echo "----------------------------------------"
+        
+        # Run from lseg_encoder directory
+        cd "${FEATURE_3DGS_DIR}/encoders/lseg_encoder" || exit 1
+        echo "Working directory: $(pwd)"
+        
+        mkdir -p "${CASE_OUTPUT_DIR}/results"
+        
+        python -u segmentation_metric.py \
+            --backbone clip_vitl16_384 \
+            --weights demo_e200.ckpt \
+            --widehead \
+            --no-scaleinv \
+            --student-feature-dir "${CASE_OUTPUT_DIR}/test/ours_${ITERATIONS}/saved_feature/" \
+            --teacher-feature-dir "${SCENE_DATA_DIR}/rgb_feature_langseg/" \
+            --test-rgb-dir "${CASE_OUTPUT_DIR}/test/ours_${ITERATIONS}/renders/" \
+            --workers 0 \
+            --eval-mode test \
+            --label_src "${SEMANTIC_LABELS}" \
+            --output "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_teacher_student_metrics.json" \
+            2>&1
+        
+        TS_METRICS_STATUS=$?
+        if [ ${TS_METRICS_STATUS} -ne 0 ]; then
+            echo "⚠️  Teacher-Student metrics failed for case ${CASE_ID}"
+        else
+            echo "✅ Teacher-Student metrics computed"
+            
+            # Display results
+            if [ -f "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_teacher_student_metrics.json" ]; then
+                echo ""
+                echo "Teacher-Student Metrics:"
+                cat "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_teacher_student_metrics.json"
+                echo ""
+            fi
+        fi
+        
+        # ----------------------------------------------------------------
+        # Step 8: Ground Truth Metrics
+        # ----------------------------------------------------------------
+        echo ""
+        echo "----------------------------------------"
+        echo "Step 8: Ground Truth Metrics (Case ${CASE_ID})"
+        echo "----------------------------------------"
+        
+        # Check if label mapping file exists
+        LABEL_MAPPING_FILE="${FEATURE_3DGS_DIR}/encoders/lseg_encoder/scannetv2-labels.combined.tsv"
+        if [ ! -f "${LABEL_MAPPING_FILE}" ]; then
+            echo "⚠️  Warning: Label mapping file not found: ${LABEL_MAPPING_FILE}"
+            echo "   GT metrics will use identity mapping (may be incorrect for ScanNet)"
+            LABEL_MAPPING_ARG=""
+        else
+            echo "✅ Using label mapping file: ${LABEL_MAPPING_FILE}"
+            LABEL_MAPPING_ARG="--label_mapping_file scannetv2-labels.combined.tsv"
+        fi
+        
+        # Run from lseg_encoder directory
+        cd "${FEATURE_3DGS_DIR}/encoders/lseg_encoder" || exit 1
+        echo "Working directory: $(pwd)"
+        
+        python -u segmentation_metric_gt.py \
+            --weights demo_e200.ckpt \
+            --data "${CASE_OUTPUT_DIR}" \
+            --scene_data_path "${SCENE_DATA_DIR}" \
+            --json_split_path "${JSON_SPLIT_PATH}" \
+            --case_id ${CASE_ID} \
+            --label_src "${SEMANTIC_LABELS}" \
+            ${LABEL_MAPPING_ARG} \
+            --iteration ${ITERATIONS} \
+            --output "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_gt_metrics.json" \
+            2>&1
+        
+        GT_METRICS_STATUS=$?
+        if [ ${GT_METRICS_STATUS} -ne 0 ]; then
+            echo "⚠️  Ground Truth metrics failed for case ${CASE_ID}"
+        else
+            echo "✅ Ground Truth metrics computed"
+            
+            # Display results
+            if [ -f "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_gt_metrics.json" ]; then
+                echo ""
+                echo "Ground Truth Metrics:"
+                cat "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_gt_metrics.json"
+                echo ""
+            fi
         fi
         
         # Return to feature-3dgs root

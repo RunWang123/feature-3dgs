@@ -1,0 +1,44 @@
+id	nyu40id	category	nyu40class
+1	1	wall	wall
+2	2	floor	floor
+3	3	cabinet	cabinet
+4	4	bed	bed
+5	5	chair	chair
+6	6	sofa	sofa
+7	7	table	table
+8	8	door	door
+9	9	window	window
+10	10	bookshelf	bookshelf
+11	11	picture	picture
+12	12	counter	counter
+14	14	desk	desk
+16	16	curtain	curtain
+24	24	refridgerator	refridgerator
+28	28	shower curtain	shower curtain
+33	33	toilet	toilet
+34	34	sink	sink
+36	36	bathtub	bathtub
+39	39	otherfurniture	other
+0	0	unlabeled	unlabeled
+13	13	blinds	blinds
+15	15	shelf	shelf
+17	17	dresser	dresser
+18	18	pillow	pillow
+19	19	mirror	mirror
+20	20	floor mat	floor mat
+21	21	clothes	clothes
+22	22	ceiling	ceiling
+23	23	books	books
+25	25	television	television
+26	26	paper	paper
+27	27	towel	towel
+29	29	box	box
+30	30	whiteboard	whiteboard
+31	31	person	person
+32	32	night stand	night stand
+35	35	lamp	lamp
+37	37	bag	bag
+38	38	otherstructure	otherstructure
+40	40	otherprop	otherprop
+41	22	ceiling	ceiling
+
