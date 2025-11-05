@@ -94,13 +94,16 @@ def readDepthMaps(pred_depth_dir, gt_depth_dir=None, json_split_path=None, case_
                     scene_name = part
                     break
             
-            if scene_name and scene_name in split_data:
-                cases = split_data[scene_name]
+            # Follow exact same logic as dataset_readers.py
+            if scene_name and 'scenes' in split_data and scene_name in split_data['scenes']:
+                cases = split_data['scenes'][scene_name]
                 if case_id < len(cases):
-                    test_indices = cases[case_id]['test']
-                    # Create mapping: sequential index -> frame ID
-                    frame_id_mapping = {i: test_indices[i] for i in range(len(test_indices))}
+                    # Use 'target_views' (test images), not 'test'
+                    test_views = cases[case_id].get('target_views', [])
+                    # Create mapping: sequential index -> frame name (without extension)
+                    frame_id_mapping = {i: test_views[i] for i in range(len(test_views))}
                     print(f"  Using frame ID mapping from JSON split (case {case_id})")
+                    print(f"  Test views: {test_views}")
         except Exception as e:
             print(f"  Warning: Could not load JSON split: {e}")
     
@@ -128,8 +131,8 @@ def readDepthMaps(pred_depth_dir, gt_depth_dir=None, json_split_path=None, case_
                 try:
                     idx = int(base_name)
                     if idx in frame_id_mapping:
-                        frame_id = frame_id_mapping[idx]
-                        gt_fname = f"{frame_id:06d}.png"
+                        frame_name = frame_id_mapping[idx]  # e.g., "000020"
+                        gt_fname = f"{frame_name}.png"  # frame_name already has leading zeros
                     else:
                         print(f"  Warning: Index {idx} not in frame mapping")
                         gt_depths.append(None)
@@ -313,7 +316,7 @@ def evaluate(model_paths, eval_depth=False, gt_depth_dir=None, min_depth=0.0, ma
                 print("  SSIM : {:>12.7f}".format(torch.tensor(ssims).mean(), ".5"))
                 print("  PSNR : {:>12.7f}".format(torch.tensor(psnrs).mean(), ".5"))
                 print("  LPIPS: {:>12.7f}".format(torch.tensor(lpipss).mean(), ".5"))
-                
+
                 full_dict[scene_dir][method].update({"SSIM": torch.tensor(ssims).mean().item(),
                                                         "PSNR": torch.tensor(psnrs).mean().item(),
                                                         "LPIPS": torch.tensor(lpipss).mean().item()})
