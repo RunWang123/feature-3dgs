@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copy labels folders from scannet_test to scannet_test_feature3dgs
+# Copy labels and depths folders from scannet_test to scannet_test_feature3dgs
 # Usage: bash copy_labels_to_feature3dgs.sh
 #
 
@@ -32,14 +32,15 @@ fi
 # ============================================================================
 
 echo "========================================"
-echo "Copy Labels to Feature-3DGS Dataset"
+echo "Copy Labels & Depths to Feature-3DGS Dataset"
 echo "========================================"
 echo "Source: ${SOURCE_DIR}"
 echo "Target: ${TARGET_DIR}"
 echo ""
 
 TOTAL_SCENES=0
-COPIED_SCENES=0
+COPIED_LABELS=0
+COPIED_DEPTHS=0
 SKIPPED_SCENES=0
 FAILED_SCENES=0
 
@@ -54,19 +55,14 @@ for SOURCE_SCENE_DIR in "${SOURCE_DIR}"/scene*; do
     TOTAL_SCENES=$((TOTAL_SCENES + 1))
     
     SOURCE_LABELS_DIR="${SOURCE_SCENE_DIR}/labels"
+    SOURCE_DEPTHS_DIR="${SOURCE_SCENE_DIR}/depths"
     TARGET_SCENE_DIR="${TARGET_DIR}/${SCENE_NAME}"
     TARGET_LABELS_DIR="${TARGET_SCENE_DIR}/labels"
+    TARGET_DEPTHS_DIR="${TARGET_SCENE_DIR}/depths"
     
     echo "----------------------------------------"
     echo "Scene ${TOTAL_SCENES}: ${SCENE_NAME}"
     echo "----------------------------------------"
-    
-    # Check if source labels exist
-    if [ ! -d "${SOURCE_LABELS_DIR}" ]; then
-        echo "⚠️  Source labels not found: ${SOURCE_LABELS_DIR}"
-        SKIPPED_SCENES=$((SKIPPED_SCENES + 1))
-        continue
-    fi
     
     # Check if target scene directory exists
     if [ ! -d "${TARGET_SCENE_DIR}" ]; then
@@ -75,36 +71,78 @@ for SOURCE_SCENE_DIR in "${SOURCE_DIR}"/scene*; do
         continue
     fi
     
-    # Count source labels
-    LABEL_COUNT=$(find "${SOURCE_LABELS_DIR}" -type f \( -name "*.png" -o -name "*.jpg" \) 2>/dev/null | wc -l)
+    SCENE_HAS_DATA=0
     
-    if [ "${LABEL_COUNT}" -eq 0 ]; then
-        echo "⚠️  No label files found in ${SOURCE_LABELS_DIR}"
-        SKIPPED_SCENES=$((SKIPPED_SCENES + 1))
-        continue
-    fi
-    
-    echo "Found ${LABEL_COUNT} label files"
-    
-    # Remove existing labels if they exist (overwrite)
-    if [ -d "${TARGET_LABELS_DIR}" ]; then
-        echo "Removing existing labels..."
-        rm -rf "${TARGET_LABELS_DIR}"
-    fi
-    
-    # Copy labels directory
-    echo "Copying labels..."
-    cp -r "${SOURCE_LABELS_DIR}" "${TARGET_LABELS_DIR}"
-    
-    # Verify copy
-    COPIED_COUNT=$(find "${TARGET_LABELS_DIR}" -type f \( -name "*.png" -o -name "*.jpg" \) 2>/dev/null | wc -l)
-    
-    if [ "${COPIED_COUNT}" -eq "${LABEL_COUNT}" ]; then
-        echo "✅ Successfully copied ${COPIED_COUNT} label files"
-        COPIED_SCENES=$((COPIED_SCENES + 1))
+    # ========== Process Labels ==========
+    if [ -d "${SOURCE_LABELS_DIR}" ]; then
+        LABEL_COUNT=$(find "${SOURCE_LABELS_DIR}" -type f \( -name "*.png" -o -name "*.jpg" \) 2>/dev/null | wc -l)
+        
+        if [ "${LABEL_COUNT}" -gt 0 ]; then
+            echo "📁 Labels: Found ${LABEL_COUNT} files"
+            SCENE_HAS_DATA=1
+            
+            # Remove existing labels if they exist (overwrite)
+            if [ -d "${TARGET_LABELS_DIR}" ]; then
+                rm -rf "${TARGET_LABELS_DIR}"
+            fi
+            
+            # Copy labels directory
+            cp -r "${SOURCE_LABELS_DIR}" "${TARGET_LABELS_DIR}"
+            
+            # Verify copy
+            COPIED_COUNT=$(find "${TARGET_LABELS_DIR}" -type f \( -name "*.png" -o -name "*.jpg" \) 2>/dev/null | wc -l)
+            
+            if [ "${COPIED_COUNT}" -eq "${LABEL_COUNT}" ]; then
+                echo "   ✅ Copied ${COPIED_COUNT} label files"
+                COPIED_LABELS=$((COPIED_LABELS + 1))
+            else
+                echo "   ❌ Copy failed: expected ${LABEL_COUNT}, got ${COPIED_COUNT}"
+                FAILED_SCENES=$((FAILED_SCENES + 1))
+            fi
+        else
+            echo "📁 Labels: Empty directory"
+        fi
     else
-        echo "❌ Copy verification failed: expected ${LABEL_COUNT}, got ${COPIED_COUNT}"
-        FAILED_SCENES=$((FAILED_SCENES + 1))
+        echo "📁 Labels: Not found"
+    fi
+    
+    # ========== Process Depths ==========
+    if [ -d "${SOURCE_DEPTHS_DIR}" ]; then
+        DEPTH_COUNT=$(find "${SOURCE_DEPTHS_DIR}" -type f -name "*.png" 2>/dev/null | wc -l)
+        
+        if [ "${DEPTH_COUNT}" -gt 0 ]; then
+            echo "📁 Depths: Found ${DEPTH_COUNT} files"
+            SCENE_HAS_DATA=1
+            
+            # Remove existing depths if they exist (overwrite)
+            if [ -d "${TARGET_DEPTHS_DIR}" ]; then
+                rm -rf "${TARGET_DEPTHS_DIR}"
+            fi
+            
+            # Copy depths directory
+            cp -r "${SOURCE_DEPTHS_DIR}" "${TARGET_DEPTHS_DIR}"
+            
+            # Verify copy
+            COPIED_COUNT=$(find "${TARGET_DEPTHS_DIR}" -type f -name "*.png" 2>/dev/null | wc -l)
+            
+            if [ "${COPIED_COUNT}" -eq "${DEPTH_COUNT}" ]; then
+                echo "   ✅ Copied ${COPIED_COUNT} depth files"
+                COPIED_DEPTHS=$((COPIED_DEPTHS + 1))
+            else
+                echo "   ❌ Copy failed: expected ${DEPTH_COUNT}, got ${COPIED_COUNT}"
+                FAILED_SCENES=$((FAILED_SCENES + 1))
+            fi
+        else
+            echo "📁 Depths: Empty directory"
+        fi
+    else
+        echo "📁 Depths: Not found"
+    fi
+    
+    # Check if scene had any data
+    if [ "${SCENE_HAS_DATA}" -eq 0 ]; then
+        echo "⚠️  No labels or depths found for this scene"
+        SKIPPED_SCENES=$((SKIPPED_SCENES + 1))
     fi
     
     echo ""
@@ -118,19 +156,24 @@ echo "========================================"
 echo "Copy Complete"
 echo "========================================"
 echo "Total scenes found: ${TOTAL_SCENES}"
-echo "Successfully copied: ${COPIED_SCENES}"
-echo "Skipped: ${SKIPPED_SCENES}"
+echo "Scenes with labels copied: ${COPIED_LABELS}"
+echo "Scenes with depths copied: ${COPIED_DEPTHS}"
+echo "Skipped (no data): ${SKIPPED_SCENES}"
 echo "Failed: ${FAILED_SCENES}"
 echo ""
+
+TOTAL_COPIED=$((COPIED_LABELS + COPIED_DEPTHS))
 
 if [ ${FAILED_SCENES} -gt 0 ]; then
     echo "⚠️  Some scenes failed to copy"
     exit 1
-elif [ ${COPIED_SCENES} -eq 0 ]; then
-    echo "⚠️  No scenes were copied"
+elif [ ${TOTAL_COPIED} -eq 0 ]; then
+    echo "⚠️  No data was copied"
     exit 1
 else
-    echo "✅ All labels copied successfully!"
+    echo "✅ Copy operation completed successfully!"
+    echo "   - ${COPIED_LABELS} scenes with labels"
+    echo "   - ${COPIED_DEPTHS} scenes with depths"
     exit 0
 fi
 
