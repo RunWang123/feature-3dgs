@@ -114,55 +114,61 @@ def compute_segmentation(args):
     print(f"Using {len(labelset)} semantic labels + background")
     print(f"Labels: {labelset}")
     
-    # Load LSeg checkpoint and extract clip_pretrained (EXACT same as LSM)
-    print("Loading LSeg checkpoint and extracting text encoder...")
-    from additional_utils.models import make_encoder
+    # Load LSeg model using EXACT same approach as LSM
+    print("Loading LSeg model (following LSM approach exactly)...")
+    from modules.models.lseg_net import LSegNet
     
-    # Load checkpoint
-    checkpoint = torch.load(args.weights, map_location='cpu')
-    state_dict = checkpoint['state_dict']
+    # Create LSegFeatureExtractor exactly as LSM does (LSM lseg.py line 5-15)
+    class LSegFeatureExtractor(LSegNet):
+        def __init__(self, half_res=True):
+            super().__init__(
+                labels='', 
+                backbone='clip_vitl16_384', 
+                features=256, 
+                crop_size=224, 
+                arch_option=0, 
+                block_depth=0, 
+                activation='lrelu'
+            )
+            self.half_res = half_res
+        
+        @classmethod
+        def from_pretrained(cls, pretrained_model_name_or_path, *args, **kwargs):
+            # EXACT same as LSM lseg.py line 111-132
+            print(f"Loading checkpoint from: {pretrained_model_name_or_path}")
+            ckpt = torch.load(pretrained_model_name_or_path, map_location='cpu')
+            print(f"Checkpoint loaded. Keys in checkpoint: {ckpt.keys()}")
+            
+            print("Processing state dict...")
+            new_state_dict = {k[len("net."):]: v for k, v in ckpt['state_dict'].items() if k.startswith("net.")}
+            print(f"Processed state dict. Number of keys: {len(new_state_dict)}")
+            
+            print("Initializing model...")
+            model = cls(*args, **kwargs)
+            
+            print("Loading state dict into model...")
+            model.load_state_dict(new_state_dict, strict=True)
+            print("State dict loaded successfully.")
+            
+            print("Cleaning up...")
+            del ckpt
+            del new_state_dict
+            
+            print("Model loading complete.")
+            return model
     
-    # Create clip_pretrained encoder (same as LSeg uses internally)
-    hooks = {
-        "clip_vitl16_384": [5, 11, 17, 23],
-        "clipRN50x16_vitl16_384": [5, 11, 17, 23],
-        "clip_vitb32_384": [2, 5, 8, 11],
-    }
-    
-    clip_pretrained, _ = make_encoder(
-        'clip_vitl16_384',
-        features=256,
-        groups=1,
-        expand=False,
-        exportable=False,
-        hooks=hooks['clip_vitl16_384'],
-        use_readout="project",
-    )
-    
-    # Load the clip_pretrained weights from checkpoint
-    clip_state_dict = {}
-    for key, value in state_dict.items():
-        if key.startswith('net.clip_pretrained.'):
-            new_key = key.replace('net.clip_pretrained.', '')
-            clip_state_dict[new_key] = value
-    
-    clip_pretrained.load_state_dict(clip_state_dict, strict=False)
-    clip_pretrained = clip_pretrained.to(device)
-    clip_pretrained.eval()
-    
-    # Extract logit_scale from checkpoint (EXACT same as LSM lseg.py line 88)
-    if 'net.logit_scale' in state_dict:
-        logit_scale = state_dict['net.logit_scale'].to(device)
-        print(f"Loaded logit_scale: {logit_scale.item():.4f}")
-    else:
-        # Fallback: use default logit scale
-        logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07)).exp().to(device)
-        print("Warning: Could not find logit_scale in checkpoint, using default")
+    # Load model exactly as LSM does
+    lseg_model = LSegFeatureExtractor.from_pretrained(args.weights, half_res=True)
+    lseg_model.eval()
+    lseg_model = lseg_model.to(device)
     
     # Encode text using LSeg's clip_pretrained (EXACT same as LSM lseg.py line 86-90)
     text = clip.tokenize(labelset).to(device)
     with torch.no_grad():
-        text_features = clip_pretrained.encode_text(text)
+        text_features = lseg_model.clip_pretrained.encode_text(text)
+    
+    # Get logit_scale from model (EXACT same as LSM lseg.py line 88)
+    logit_scale = lseg_model.logit_scale.to(device)
     
     print(f"Text features shape: {text_features.shape}")
     print(f"Logit scale: {logit_scale.item():.4f}")
