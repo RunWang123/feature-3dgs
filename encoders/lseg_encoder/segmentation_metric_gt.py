@@ -114,47 +114,55 @@ def compute_segmentation(args):
     print(f"Using {len(labelset)} semantic labels + background")
     print(f"Labels: {labelset}")
     
-    # Load LSeg model to get proper text encoder (EXACT same as LSM)
-    print("Loading LSeg model for text encoding (following LSM approach)...")
-    from modules.lseg_module import LSegModule
+    # Load LSeg checkpoint and extract clip_pretrained (EXACT same as LSM)
+    print("Loading LSeg checkpoint and extracting text encoder...")
+    from additional_utils.models import make_encoder
     
-    # Load LSeg module the same way LSM does
-    lseg_module = LSegModule.load_from_checkpoint(
-        checkpoint_path=args.weights,
-        data_path=None,
-        dataset='ade20k',
-        backbone='clip_vitl16_384',
-        aux=False,
-        num_features=256,
-        aux_weight=0,
-        se_loss=False,
-        se_weight=0,
-        base_lr=0,
-        batch_size=1,
-        max_epochs=0,
-        ignore_index=-1,
-        dropout=0.0,
-        scale_inv=False,
-        augment=False,
-        no_batchnorm=False,
-        widehead=True,
-        widehead_hr=False,
-        map_locatin="cpu",
-        arch_option=0,
-        strict=False,  # Don't fail on missing keys
-        block_depth=0,
-        activation='lrelu',
+    # Load checkpoint
+    checkpoint = torch.load(args.weights, map_location='cpu')
+    state_dict = checkpoint['state_dict']
+    
+    # Create clip_pretrained encoder (same as LSeg uses internally)
+    hooks = {
+        "clip_vitl16_384": [5, 11, 17, 23],
+        "clipRN50x16_vitl16_384": [5, 11, 17, 23],
+        "clip_vitb32_384": [2, 5, 8, 11],
+    }
+    
+    clip_pretrained, _ = make_encoder(
+        'clip_vitl16_384',
+        features=256,
+        groups=1,
+        expand=False,
+        exportable=False,
+        hooks=hooks['clip_vitl16_384'],
+        use_readout="project",
     )
-    lseg_module.eval()
-    lseg_module = lseg_module.to(device)
+    
+    # Load the clip_pretrained weights from checkpoint
+    clip_state_dict = {}
+    for key, value in state_dict.items():
+        if key.startswith('net.clip_pretrained.'):
+            new_key = key.replace('net.clip_pretrained.', '')
+            clip_state_dict[new_key] = value
+    
+    clip_pretrained.load_state_dict(clip_state_dict, strict=False)
+    clip_pretrained = clip_pretrained.to(device)
+    clip_pretrained.eval()
+    
+    # Extract logit_scale from checkpoint (EXACT same as LSM lseg.py line 88)
+    if 'net.logit_scale' in state_dict:
+        logit_scale = state_dict['net.logit_scale'].to(device)
+        print(f"Loaded logit_scale: {logit_scale.item():.4f}")
+    else:
+        # Fallback: use default logit scale
+        logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07)).exp().to(device)
+        print("Warning: Could not find logit_scale in checkpoint, using default")
     
     # Encode text using LSeg's clip_pretrained (EXACT same as LSM lseg.py line 86-90)
     text = clip.tokenize(labelset).to(device)
     with torch.no_grad():
-        text_features = lseg_module.net.clip_pretrained.encode_text(text)
-    
-    # Get logit scale from LSeg model (EXACT same as LSM lseg.py line 88)
-    logit_scale = lseg_module.net.logit_scale.to(device)
+        text_features = clip_pretrained.encode_text(text)
     
     print(f"Text features shape: {text_features.shape}")
     print(f"Logit scale: {logit_scale.item():.4f}")
