@@ -403,6 +403,7 @@ def test(args):
         activation=args.activation,
     )
     labels = module.get_labels('ade20k')
+    num_classes = len(labels)
     input_transform = module.val_transform
 
     loader_kwargs = (
@@ -417,11 +418,8 @@ def test(args):
         labelset = args.label_src.split(',')
     if labelset == []:
         text = clip.tokenize(labels)
-        num_classes = len(labels)  # 150 ADE20K classes
     else:
         text = clip.tokenize(labelset)
-        labels = labelset  # Use custom labels
-        num_classes = len(labelset)  # Use custom class count
     
     hooks = {
             "clip_vitl16_384": [5, 11, 17, 23],
