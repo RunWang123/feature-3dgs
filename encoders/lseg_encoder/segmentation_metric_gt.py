@@ -366,9 +366,22 @@ def compute_segmentation(args):
             # Background pixels should stay as 0
             pred_class = torch.where(gt_label_tensor == 0, torch.zeros_like(pred_class), pred_class)
             
+            # Ensure classes are in valid range [0, num_classes-1]
+            # Clamp pred_class to valid range
+            pred_class = torch.clamp(pred_class, 0, num_classes - 1)
+            # Clamp gt_label to valid range (in case GT has invalid labels)
+            gt_label_clamped = torch.clamp(gt_label_tensor, 0, num_classes - 1)
+            
+            # Debug info (first iteration only)
+            if feature_file == feature_files[0]:
+                print(f"Debug - pred_class range: [{pred_class.min().item()}, {pred_class.max().item()}]")
+                print(f"Debug - gt_label range: [{gt_label_clamped.min().item()}, {gt_label_clamped.max().item()}]")
+                print(f"Debug - pred_class shape: {pred_class.shape}")
+                print(f"Debug - gt_label shape: {gt_label_clamped.shape}")
+            
             # Update metrics
-            miou_metric.update(pred_class, gt_label_tensor)
-            accuracy_metric.update(pred_class, gt_label_tensor)
+            miou_metric.update(pred_class, gt_label_clamped)
+            accuracy_metric.update(pred_class, gt_label_clamped)
         
         # Compute final metrics
         final_miou = miou_metric.compute()
