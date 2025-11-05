@@ -100,15 +100,16 @@ def load_and_remap_label(label_path, remap_fn, target_size=None):
     """
     Load a label image and remap to target label space.
     
-    CRITICAL: Follows LSM's exact approach (testdata.py lines 125-137):
+    CRITICAL: Follows LSM's EXACT approach (preprocess_scannet_test_images_only.py lines 17-71):
     1. Load raw label (ScanNet IDs like 1, 2, 3, 34, etc.)
-    2. Resize raw label with NEAREST interpolation
-    3. THEN remap to target classes [0-8]
+    2. RESIZE to larger size (using max ratio to ensure at least target size)
+    3. CENTER CROP to exact target size
+    4. THEN remap to target classes [0-8]
     
     Args:
         label_path: Path to label PNG file
         remap_fn: Remapping function from create_label_remapping()
-        target_size: (H, W) tuple to resize to, or None
+        target_size: (target_H, target_W) tuple to resize to, or None
     
     Returns:
         Remapped label array (H, W) with values in [0, num_classes]
@@ -117,13 +118,34 @@ def load_and_remap_label(label_path, remap_fn, target_size=None):
     label_img = Image.open(label_path)
     label_array = np.array(label_img)
     
-    # Resize FIRST if needed (EXACT same as LSM: resize BEFORE remapping)
+    # Resize and crop if needed (EXACT same as LSM: resize+crop BEFORE remapping)
     if target_size is not None:
-        label_pil = Image.fromarray(label_array)  # Keep as raw IDs
-        label_pil = label_pil.resize((target_size[1], target_size[0]), Image.NEAREST)
-        label_array = np.array(label_pil)
+        target_h, target_w = target_size
+        original_h, original_w = label_array.shape[:2]
+        
+        # Calculate resize ratio (EXACT same as LSM lines 44-46)
+        h_ratio = target_h / original_h
+        w_ratio = target_w / original_w
+        ratio = max(h_ratio, w_ratio)  # Use max to ensure at least target size
+        new_h, new_w = int(original_h * ratio), int(original_w * ratio)
+        
+        # Ensure dimensions are at least target size (handle rounding)
+        if new_h < target_h:
+            new_h = target_h
+        if new_w < target_w:
+            new_w = target_w
+        
+        # Resize to larger size with NEAREST (EXACT same as LSM lines 60)
+        label_pil = Image.fromarray(label_array)
+        label_resized = label_pil.resize((new_w, new_h), Image.NEAREST)
+        label_array = np.array(label_resized)
+        
+        # Center crop to exact target size (EXACT same as LSM lines 56-57, 64)
+        start_x = (new_w - target_w) // 2
+        start_y = (new_h - target_h) // 2
+        label_array = label_array[start_y:start_y + target_h, start_x:start_x + target_w]
     
-    # THEN remap labels (EXACT same as LSM: remap AFTER resizing)
+    # THEN remap labels (EXACT same as LSM: remap AFTER resize+crop)
     remapped = remap_fn(label_array)
     
     return remapped
