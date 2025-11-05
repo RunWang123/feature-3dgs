@@ -30,10 +30,6 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import clip
-from encoding.models.sseg import BaseNet
-from modules.lseg_module import LSegModule
-from additional_utils.models import LSeg_MultiEvalModule as MultiEvalModule
-from utils import Resize
 
 # For metrics computation
 from torchmetrics import JaccardIndex, Accuracy
@@ -106,34 +102,9 @@ def compute_segmentation(args):
     # Setup device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    # Load LSeg module
-    print("Loading LSeg module...")
-    module = LSegModule.load_from_checkpoint(
-        checkpoint_path=args.weights,
-        data_path=None,
-        dataset='ade20k',
-        backbone=args.backbone,
-        aux=False,
-        num_features=256,
-        aux_weight=0,
-        se_loss=False,
-        se_weight=0,
-        base_lr=0,
-        batch_size=1,
-        max_epochs=0,
-        ignore_index=-1,
-        dropout=0.0,
-        scale_inv=False,
-        augment=False,
-        no_batchnorm=False,
-        widehead=True,
-        widehead_hr=False,
-        map_locatin="cpu",
-        arch_option=0,
-        strict=True,
-        block_depth=0,
-        activation='lrelu',
-    )
+    # Load CLIP model (we only need this for text encoding)
+    print("Loading CLIP model...")
+    clip_model, _ = clip.load("ViT-L/14@336px", device=device, jit=False)
     
     # Get labels
     if args.label_src and args.label_src != 'default':
@@ -147,34 +118,13 @@ def compute_segmentation(args):
     print(f"Using {len(labelset)} semantic labels + background")
     print(f"Labels: {labelset}")
     
-    # Initialize LSeg feature extractor (EXACT same as LSM)
-    from additional_utils.models import make_encoder
-    
-    # This will be used to decode features to semantic predictions
-    # Following LSM's lseg.py decode_feature logic
-    hooks = {
-        "clip_vitl16_384": [5, 11, 17, 23],
-        "clipRN50x16_vitl16_384": [5, 11, 17, 23],
-        "clip_vitb32_384": [2, 5, 8, 11],
-    }
-    
-    clip_pretrained, _ = make_encoder(
-        args.backbone,
-        features=256,
-        groups=1,
-        expand=False,
-        exportable=False,
-        hooks=hooks[args.backbone],
-        use_readout="project",
-    )
-    clip_pretrained = clip_pretrained.cuda()
-    
-    # Encode text features (EXACT same as LSM)
-    text = clip.tokenize(labelset).cuda()
-    text_features = clip_pretrained.encode_text(text)
+    # Encode text features with CLIP (EXACT same as LSM)
+    text = clip.tokenize(labelset).to(device)
+    with torch.no_grad():
+        text_features = clip_model.encode_text(text)
     
     # Logit scale (EXACT same as LSM)
-    logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07)).exp().cuda()
+    logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07)).exp().to(device)
     
     # Setup label remapping
     if args.label_mapping_file:
@@ -307,11 +257,6 @@ def compute_segmentation(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Semantic Segmentation Metrics with GT Labels')
-    
-    # Model parameters
-    parser.add_argument('--backbone', default='clip_vitl16_384', type=str)
-    parser.add_argument('--weights', default='demo_e200.ckpt', type=str,
-                       help='Path to LSeg checkpoint')
     
     # Data parameters
     parser.add_argument('--data', required=True, type=str,
