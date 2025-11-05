@@ -170,6 +170,10 @@ def compute_segmentation(args):
     num_classes = len(labelset) + 1  # +1 for background
     print(f"Using {len(labelset)} semantic labels + background")
     print(f"Labels: {labelset}")
+    print(f"Label mapping: ", end="")
+    for i, label in enumerate(labelset):
+        print(f"{label}→{i+1}", end=" ")
+    print(f"(background→0)")
     
     # Load LSeg model using EXACT same approach as LSM
     print("Loading LSeg model (following LSM approach exactly)...")
@@ -443,6 +447,18 @@ def compute_segmentation(args):
                 
                 # Get LSM color palette
                 lsm_palette = get_lsm_palette(len(labelset))
+                
+                # Debug: Print unique GT label values in this image
+                if feature_file == feature_files[0]:
+                    unique_gt = torch.unique(gt_label_clamped).cpu().numpy()
+                    print(f"Unique GT labels in first image: {unique_gt}")
+                    print("Color mapping:")
+                    for cls_id in unique_gt:
+                        if cls_id < len(labelset) + 1:
+                            if cls_id == 0:
+                                print(f"  Class 0 (background) → tab10[0] (blue)")
+                            else:
+                                print(f"  Class {cls_id} ({labelset[cls_id-1]}) → tab10[{cls_id}] ({['blue','orange','green','red','purple','brown','pink','gray','yellow-green'][cls_id]})")
                 
                 # Convert GT label to colored image (EXACT same as segmentation.py)
                 gt_vis = Image.fromarray(gt_label_clamped.cpu().numpy().astype('uint8'))
