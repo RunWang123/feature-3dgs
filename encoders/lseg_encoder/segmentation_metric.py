@@ -428,10 +428,10 @@ class FeatureImageFolderLoader(enc_ds.ADE20KSegmentation):#(torch.utils.data.Dat
         self.images = get_folder_images(image_root)
         if len(self.student_features) == 0:
             raise(RuntimeError("Found 0 prediction features in subfolders of: \
-                " + self.teacher_feature_root + "\n"))
+                " + self.student_feature_root + "\n"))
         if len(self.teacher_features) == 0:
             raise(RuntimeError("Found 0 ground truth features in subfolders of: \
-                " + self.gt_label_root + "\n"))
+                " + self.teacher_feature_root + "\n"))
         # self.num_class = 150  # ADE20k
 
     def __getitem__(self, index):
