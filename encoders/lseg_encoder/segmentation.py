@@ -322,6 +322,35 @@ adepallete = [0,0,0,120,120,120,180,120,120,6,230,230,80,50,50,4,200,3,120,120,8
               194,194,102,255,0,92,0,255]
 
 
+def get_lsm_palette(num_labels):
+    """
+    Generate LSM-compatible color palette using matplotlib's tab10 colormap.
+    This matches the exact color scheme used in the LSM project.
+    
+    Args:
+        num_labels: Number of semantic labels (e.g., 8 for LSM's default labels)
+    
+    Returns:
+        Flattened list of RGB values [R0, G0, B0, R1, G1, B1, ...]
+    """
+    import matplotlib.pyplot as plt
+    
+    # LSM uses: NUM_LABELS = len(LABELS) + 1 to include background
+    num_classes = num_labels + 1  # +1 for background/unlabeled (class 0)
+    
+    # Get tab10 colormap (same as LSM)
+    cmap = plt.cm.get_cmap('tab10', num_classes)
+    
+    # Extract RGB values (first 3 channels, ignore alpha)
+    # and convert to 0-255 range
+    palette = []
+    for i in range(num_classes):
+        rgb = cmap(i)[:3]  # Get RGB, ignore alpha
+        palette.extend([int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255)])
+    
+    return palette
+
+
 ###
 class FeatureImageFolderLoader(enc_ds.ADE20KSegmentation):#(torch.utils.data.Dataset):
     def __init__(self, feature_root, image_root, transform=None):
@@ -544,7 +573,15 @@ def test(args):
             # fmap: torch.Size([1, 512, 1194, 1600]), img: torch.Size([3, 360, 480])
             for predict, impath, img, fmap in zip(predicts, dst, images, features):
                 # prediction and visualize masks
-                mask = utils.get_mask_pallete(predict - 1, 'detail')
+                # Use LSM palette for custom labels to match LSM project colors exactly
+                if labelset == []:
+                    mask = utils.get_mask_pallete(predict - 1, 'detail')
+                else:
+                    # Create mask with LSM-compatible tab10 colors
+                    lsm_palette = get_lsm_palette(len(labelset))
+                    mask = Image.fromarray(predict.squeeze().astype('uint8'))
+                    mask.putpalette(lsm_palette)
+                
                 outname = os.path.splitext(impath)[0] + ".png"
                 mask.save(os.path.join(output_path, outname))
 
@@ -562,7 +599,9 @@ def test(args):
                 if labelset == []:
                     seg, patches = get_legend_patch(predict - 1, adepallete, labels)
                 else:
-                    seg, patches = get_legend_patch(predict - 1, adepallete, labelset)
+                    # Use LSM-compatible tab10 colormap for custom labels
+                    lsm_palette = get_lsm_palette(len(labelset))
+                    seg, patches = get_legend_patch(predict - 1, lsm_palette, labelset)
                 
                 seg = seg.convert("RGBA")
                 plt.figure()
