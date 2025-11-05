@@ -30,6 +30,8 @@ FEATURE_3DGS_DIR="/home/runw/project/feature-3dgs"
 
 # Training parameters
 ITERATIONS=7000
+SAVE_ITERATIONS="2000 3000 4000 5000 6000 7000"
+TEST_ITERATIONS="2000 3000 4000 5000 6000 7000"
 SEMANTIC_LABELS="wall,floor,ceiling,chair,table,sofa,bed,other"
 
 # ============================================================================
@@ -200,6 +202,8 @@ for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
             -f lseg \
             --speedup \
             --iterations ${ITERATIONS} \
+            --save_iterations ${SAVE_ITERATIONS} \
+            --test_iterations ${TEST_ITERATIONS} \
             --eval \
             --json_split_path "${JSON_SPLIT_PATH}" \
             --case_id ${CASE_ID} \
@@ -215,7 +219,7 @@ for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
         echo "✅ Training completed"
         
         # ----------------------------------------------------------------
-        # Step 4: Render
+        # Step 4: Render (all saved iterations)
         # ----------------------------------------------------------------
         echo ""
         echo "----------------------------------------"
@@ -226,23 +230,28 @@ for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
         cd "${FEATURE_3DGS_DIR}" || exit 1
         echo "Working directory: $(pwd)"
         
-        python render.py \
-            -s "${SCENE_DATA_DIR}" \
-            -m "${CASE_OUTPUT_DIR}" \
-            --iteration ${ITERATIONS} \
-            --eval \
-            --json_split_path "${JSON_SPLIT_PATH}" \
-            --case_id ${CASE_ID} \
-            2>&1
+        # Render all saved iterations
+        for ITER in ${SAVE_ITERATIONS}; do
+            echo "Rendering iteration ${ITER}..."
+            
+            python render.py \
+                -s "${SCENE_DATA_DIR}" \
+                -m "${CASE_OUTPUT_DIR}" \
+                --iteration ${ITER} \
+                --eval \
+                --json_split_path "${JSON_SPLIT_PATH}" \
+                --case_id ${CASE_ID} \
+                2>&1
+            
+            RENDER_STATUS=$?
+            if [ ${RENDER_STATUS} -ne 0 ]; then
+                echo "⚠️  Rendering failed for iteration ${ITER}"
+            else
+                echo "✅ Rendering iteration ${ITER} completed"
+            fi
+        done
         
-        RENDER_STATUS=$?
-        if [ ${RENDER_STATUS} -ne 0 ]; then
-            echo "❌ Rendering failed for case ${CASE_ID}"
-            FAILED_CASES=$((FAILED_CASES + 1))
-            continue
-        fi
-        
-        echo "✅ Rendering completed"
+        echo "✅ All renderings completed"
         
         # ----------------------------------------------------------------
         # Step 5: Metrics
@@ -256,7 +265,24 @@ for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
         cd "${FEATURE_3DGS_DIR}" || exit 1
         echo "Working directory: $(pwd)"
         
-        python metrics.py -m "${CASE_OUTPUT_DIR}" 2>&1
+        # Check if GT depth directory exists
+        GT_DEPTH_DIR="${SCENE_DATA_DIR}/depths"
+        if [ -d "${GT_DEPTH_DIR}" ]; then
+            echo "Found GT depth directory: ${GT_DEPTH_DIR}"
+            echo "Evaluating depth metrics on TRAINING views (LSM-aligned: 0.1m-100m, median norm)..."
+            python metrics.py \
+                -m "${CASE_OUTPUT_DIR}" \
+                --eval_depth \
+                --gt_depth_dir "${GT_DEPTH_DIR}" \
+                --json_split_path "${JSON_SPLIT_PATH}" \
+                --case_id ${CASE_ID} \
+                2>&1
+            # Note: Uses defaults (min=0.1m, max=100m) per LSM paper
+            # Depth evaluated on ref_views (training), RGB on target_views (test)
+        else
+            echo "GT depth directory not found, computing RGB metrics only..."
+            python metrics.py -m "${CASE_OUTPUT_DIR}" 2>&1
+        fi
         
         METRICS_STATUS=$?
         if [ ${METRICS_STATUS} -ne 0 ]; then
@@ -274,7 +300,7 @@ for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
         fi
         
         # ----------------------------------------------------------------
-        # Step 6: Segmentation
+        # Step 6: Segmentation (all saved iterations)
         # ----------------------------------------------------------------
         echo ""
         echo "----------------------------------------"
@@ -285,24 +311,31 @@ for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
         cd "${FEATURE_3DGS_DIR}/encoders/lseg_encoder" || exit 1
         echo "Working directory: $(pwd)"
         
-        python -u segmentation.py \
-            --data "${CASE_OUTPUT_DIR}" \
-            --iteration ${ITERATIONS} \
-            --label_src "${SEMANTIC_LABELS}" \
-            2>&1
+        # Segment all saved iterations
+        for ITER in ${SAVE_ITERATIONS}; do
+            echo "Segmenting iteration ${ITER}..."
+            
+            python -u segmentation.py \
+                --data "${CASE_OUTPUT_DIR}" \
+                --iteration ${ITER} \
+                --label_src "${SEMANTIC_LABELS}" \
+                2>&1
+            
+            SEG_STATUS=$?
+            if [ ${SEG_STATUS} -ne 0 ]; then
+                echo "⚠️  Segmentation failed for iteration ${ITER}"
+            else
+                echo "✅ Segmentation iteration ${ITER} completed"
+            fi
+        done
         
-        SEG_STATUS=$?
-        if [ ${SEG_STATUS} -ne 0 ]; then
-            echo "⚠️  Segmentation failed for case ${CASE_ID}"
-        else
-            echo "✅ Segmentation completed"
-        fi
+        echo "✅ All segmentations completed"
         
         # Return to feature-3dgs root
         cd "${FEATURE_3DGS_DIR}" || exit 1
         
         # ----------------------------------------------------------------
-        # Step 7: Teacher-Student Metrics
+        # Step 7: Teacher-Student Metrics (all saved iterations)
         # ----------------------------------------------------------------
         echo ""
         echo "----------------------------------------"
@@ -315,37 +348,36 @@ for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
         
         mkdir -p "${CASE_OUTPUT_DIR}/results"
         
-        python -u segmentation_metric.py \
-            --backbone clip_vitl16_384 \
-            --weights demo_e200.ckpt \
-            --widehead \
-            --no-scaleinv \
-            --student-feature-dir "${CASE_OUTPUT_DIR}/test/ours_${ITERATIONS}/saved_feature/" \
-            --teacher-feature-dir "${SCENE_DATA_DIR}/rgb_feature_langseg/" \
-            --test-rgb-dir "${CASE_OUTPUT_DIR}/test/ours_${ITERATIONS}/renders/" \
-            --workers 0 \
-            --eval-mode test \
-            --label_src "${SEMANTIC_LABELS}" \
-            --output "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_teacher_student_metrics.json" \
-            2>&1
-        
-        TS_METRICS_STATUS=$?
-        if [ ${TS_METRICS_STATUS} -ne 0 ]; then
-            echo "⚠️  Teacher-Student metrics failed for case ${CASE_ID}"
-        else
-            echo "✅ Teacher-Student metrics computed"
+        # Compute metrics for all saved iterations
+        for ITER in ${SAVE_ITERATIONS}; do
+            echo "Computing Teacher-Student metrics for iteration ${ITER}..."
             
-            # Display results
-            if [ -f "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_teacher_student_metrics.json" ]; then
-                echo ""
-                echo "Teacher-Student Metrics:"
-                cat "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_teacher_student_metrics.json"
-                echo ""
+            python -u segmentation_metric.py \
+                --backbone clip_vitl16_384 \
+                --weights demo_e200.ckpt \
+                --widehead \
+                --no-scaleinv \
+                --student-feature-dir "${CASE_OUTPUT_DIR}/test/ours_${ITER}/saved_feature/" \
+                --teacher-feature-dir "${SCENE_DATA_DIR}/rgb_feature_langseg/" \
+                --test-rgb-dir "${CASE_OUTPUT_DIR}/test/ours_${ITER}/renders/" \
+                --workers 0 \
+                --eval-mode test \
+                --label_src "${SEMANTIC_LABELS}" \
+                --output "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_iter${ITER}_teacher_student_metrics.json" \
+                2>&1
+            
+            TS_METRICS_STATUS=$?
+            if [ ${TS_METRICS_STATUS} -ne 0 ]; then
+                echo "⚠️  Teacher-Student metrics failed for iteration ${ITER}"
+            else
+                echo "✅ Teacher-Student metrics iteration ${ITER} computed"
             fi
-        fi
+        done
+        
+        echo "✅ All Teacher-Student metrics computed"
         
         # ----------------------------------------------------------------
-        # Step 8: Ground Truth Metrics
+        # Step 8: Ground Truth Metrics (all saved iterations)
         # ----------------------------------------------------------------
         echo ""
         echo "----------------------------------------"
@@ -367,32 +399,31 @@ for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
         cd "${FEATURE_3DGS_DIR}/encoders/lseg_encoder" || exit 1
         echo "Working directory: $(pwd)"
         
-        python -u segmentation_metric_gt.py \
-            --weights demo_e200.ckpt \
-            --data "${CASE_OUTPUT_DIR}" \
-            --scene_data_path "${SCENE_DATA_DIR}" \
-            --json_split_path "${JSON_SPLIT_PATH}" \
-            --case_id ${CASE_ID} \
-            --label_src "${SEMANTIC_LABELS}" \
-            ${LABEL_MAPPING_ARG} \
-            --iteration ${ITERATIONS} \
-            --output "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_gt_metrics.json" \
-            2>&1
-        
-        GT_METRICS_STATUS=$?
-        if [ ${GT_METRICS_STATUS} -ne 0 ]; then
-            echo "⚠️  Ground Truth metrics failed for case ${CASE_ID}"
-        else
-            echo "✅ Ground Truth metrics computed"
+        # Compute metrics for all saved iterations
+        for ITER in ${SAVE_ITERATIONS}; do
+            echo "Computing Ground Truth metrics for iteration ${ITER}..."
             
-            # Display results
-            if [ -f "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_gt_metrics.json" ]; then
-                echo ""
-                echo "Ground Truth Metrics:"
-                cat "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_gt_metrics.json"
-                echo ""
+            python -u segmentation_metric_gt.py \
+                --weights demo_e200.ckpt \
+                --data "${CASE_OUTPUT_DIR}" \
+                --scene_data_path "${SCENE_DATA_DIR}" \
+                --json_split_path "${JSON_SPLIT_PATH}" \
+                --case_id ${CASE_ID} \
+                --label_src "${SEMANTIC_LABELS}" \
+                ${LABEL_MAPPING_ARG} \
+                --iteration ${ITER} \
+                --output "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_iter${ITER}_gt_metrics.json" \
+                2>&1
+            
+            GT_METRICS_STATUS=$?
+            if [ ${GT_METRICS_STATUS} -ne 0 ]; then
+                echo "⚠️  Ground Truth metrics failed for iteration ${ITER}"
+            else
+                echo "✅ Ground Truth metrics iteration ${ITER} computed"
             fi
-        fi
+        done
+        
+        echo "✅ All Ground Truth metrics computed"
         
         # Return to feature-3dgs root
         cd "${FEATURE_3DGS_DIR}" || exit 1
