@@ -102,10 +102,6 @@ def compute_segmentation(args):
     # Setup device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    # Load CLIP model (we only need this for text encoding)
-    print("Loading CLIP model...")
-    clip_model, _ = clip.load("ViT-L/14@336px", device=device, jit=False)
-    
     # Get labels
     if args.label_src and args.label_src != 'default':
         labelset = args.label_src.split(',')
@@ -118,13 +114,60 @@ def compute_segmentation(args):
     print(f"Using {len(labelset)} semantic labels + background")
     print(f"Labels: {labelset}")
     
-    # Encode text features with CLIP (EXACT same as LSM)
+    # Load LSeg checkpoint to get proper text encoder (512-dim)
+    print("Loading LSeg checkpoint for text encoding...")
+    import torch
+    checkpoint = torch.load(args.weights, map_location='cpu')
+    
+    # Load CLIP model and get text features
+    import clip
+    clip_model, _ = clip.load("ViT-L/14@336px", device=device, jit=False)
+    
+    # Encode text
     text = clip.tokenize(labelset).to(device)
     with torch.no_grad():
-        text_features = clip_model.encode_text(text)
+        text_features_768 = clip_model.encode_text(text).float()
+    
+    # Project to 512-dim using LSeg's projection (from checkpoint)
+    # LSeg uses a linear layer to project 768 -> 512
+    # This should be in the checkpoint under 'state_dict'
+    try:
+        # Try to load the text projection layer from checkpoint
+        if 'state_dict' in checkpoint:
+            state_dict = checkpoint['state_dict']
+        else:
+            state_dict = checkpoint
+        
+        # Find the clip text projection weights
+        # In LSeg, this is typically model.clip_pretrained.model.text_projection
+        text_proj_weight = None
+        for key in state_dict.keys():
+            if 'text_projection' in key:
+                text_proj_weight = state_dict[key]
+                break
+        
+        if text_proj_weight is not None and text_proj_weight.shape[0] == 512:
+            print(f"Found text projection: {text_proj_weight.shape}")
+            text_proj = text_proj_weight.to(device)
+            # Apply projection: (batch, 768) @ (768, 512) -> (batch, 512)
+            text_features = text_features_768 @ text_proj
+        else:
+            # Fallback: Use simple linear projection
+            print("Using fallback linear projection 768->512")
+            proj_layer = nn.Linear(768, 512, bias=False).to(device)
+            nn.init.xavier_uniform_(proj_layer.weight)
+            text_features = proj_layer(text_features_768)
+    except Exception as e:
+        print(f"Warning: Could not load text projection from checkpoint: {e}")
+        print("Using fallback linear projection 768->512")
+        proj_layer = nn.Linear(768, 512, bias=False).to(device)
+        nn.init.xavier_uniform_(proj_layer.weight)
+        text_features = proj_layer(text_features_768)
     
     # Logit scale (EXACT same as LSM)
     logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07)).exp().to(device)
+    
+    print(f"Text features shape: {text_features.shape}")
     
     # Setup label remapping
     if args.label_mapping_file:
@@ -162,23 +205,61 @@ def compute_segmentation(args):
         if len(gt_label_files) > 0:
             print(f"Sample GT label files: {gt_label_files[:3]}")
         
-        # Load camera info to map feature indices to frame names
-        cameras_json = os.path.join(args.data, split_name, f"ours_{args.iteration}", "cameras.json")
+        # Load mapping from indices to frame names
         index_to_frame = {}
-        if os.path.exists(cameras_json):
-            with open(cameras_json, 'r') as f:
-                cameras = json.load(f)
-            for idx, cam in enumerate(cameras):
-                img_name = cam.get('img_name', '')
-                # Extract frame ID from image name (e.g., "000010" from path or filename)
-                frame_id = os.path.splitext(os.path.basename(img_name))[0]
-                index_to_frame[idx] = frame_id
-            print(f"Loaded {len(index_to_frame)} camera mappings")
-            if len(index_to_frame) > 0:
-                print(f"Sample mappings: {list(index_to_frame.items())[:3]}")
-        else:
-            print(f"Warning: cameras.json not found at {cameras_json}")
-            print("Will try to match by padding frame IDs...")
+        
+        # Option 1: Use JSON split file (preferred)
+        if args.json_split_path and os.path.exists(args.json_split_path):
+            print(f"Loading frame mappings from JSON split: {args.json_split_path}")
+            with open(args.json_split_path, 'r') as f:
+                split_data = json.load(f)
+            
+            # Get scene name from data path
+            scene_name = os.path.basename(os.path.normpath(args.scene_data_path))
+            
+            if 'scenes' in split_data and scene_name in split_data['scenes']:
+                scene_cases = split_data['scenes'][scene_name]
+                
+                # If case_id specified, use that case; otherwise use first case
+                if args.case_id >= 0 and args.case_id < len(scene_cases):
+                    case = scene_cases[args.case_id]
+                else:
+                    case = scene_cases[0]
+                    if args.case_id >= 0:
+                        print(f"Warning: case_id {args.case_id} not found, using case 0")
+                
+                # Map based on split
+                if split_name == 'test':
+                    frame_names = case.get('target_views', [])
+                else:  # train
+                    frame_names = case.get('ref_views', [])
+                
+                for idx, frame_name in enumerate(frame_names):
+                    index_to_frame[idx] = frame_name
+                
+                print(f"Loaded {len(index_to_frame)} {split_name} frame mappings from JSON split")
+                if len(index_to_frame) > 0:
+                    print(f"Sample mappings: {list(index_to_frame.items())[:3]}")
+            else:
+                print(f"Warning: Scene {scene_name} not found in JSON split")
+        
+        # Option 2: Use cameras.json from render output
+        if not index_to_frame:
+            cameras_json = os.path.join(args.data, split_name, f"ours_{args.iteration}", "cameras.json")
+            if os.path.exists(cameras_json):
+                with open(cameras_json, 'r') as f:
+                    cameras = json.load(f)
+                for idx, cam in enumerate(cameras):
+                    img_name = cam.get('img_name', '')
+                    # Extract frame ID from image name (e.g., "000010" from path or filename)
+                    frame_id = os.path.splitext(os.path.basename(img_name))[0]
+                    index_to_frame[idx] = frame_id
+                print(f"Loaded {len(index_to_frame)} camera mappings from cameras.json")
+                if len(index_to_frame) > 0:
+                    print(f"Sample mappings: {list(index_to_frame.items())[:3]}")
+            else:
+                print(f"Warning: Neither JSON split nor cameras.json found")
+                print("Will try to match by padding frame IDs (likely incorrect)...")
         
         # Get feature files
         feature_files = sorted([f for f in os.listdir(feature_path) if f.endswith('_fmap_CxHxW.pt')])
@@ -309,6 +390,10 @@ def compute_segmentation(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Semantic Segmentation Metrics with GT Labels')
     
+    # Model parameters
+    parser.add_argument('--weights', default='demo_e200.ckpt', type=str,
+                       help='Path to LSeg checkpoint for text encoding')
+    
     # Data parameters
     parser.add_argument('--data', required=True, type=str,
                        help='Path to model output directory (contains test/ours_XXXX/saved_feature/)')
@@ -316,6 +401,10 @@ if __name__ == "__main__":
                        help='Path to original scene data (contains labels/ folder)')
     parser.add_argument('--label_mapping_file', default=None, type=str,
                        help='Path to scannetv2-labels.combined.tsv for label remapping')
+    parser.add_argument('--json_split_path', default=None, type=str,
+                       help='Path to JSON split file for mapping indices to frame names')
+    parser.add_argument('--case_id', default=-1, type=int,
+                       help='Case ID to evaluate (if using JSON split with multiple cases)')
     parser.add_argument('--iteration', default=7000, type=int,
                        help='Which iteration to evaluate')
     parser.add_argument('--label_src', required=True, type=str,
