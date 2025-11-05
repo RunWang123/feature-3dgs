@@ -10,8 +10,8 @@ set -e
 # Configuration
 # ============================================================================
 
-SOURCE_DIR="/home/runw/Project/data/colmap/data/scannet_test"
-TARGET_DIR="/home/runw/Project/data/colmap/data/scannet_test_feature3dgs"
+SOURCE_DIR="/scratch/runw/project/colmap/scannet_test"
+TARGET_DIR="/scratch/runw/project/colmap/scannet_test_feature3dgs"
 
 # ============================================================================
 # Validate directories
