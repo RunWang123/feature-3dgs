@@ -43,6 +43,7 @@ echo "=========================================="
 python3 "${SCRIPT_DIR}/aggregate_test_results.py" \
     --results_dir "$RESULTS_DIR" \
     --output_dir "$ANALYSIS_DIR" \
+    --iteration "$(echo $METHOD | sed 's/ours_//')" \
     --formats json csv latex
 
 if [ $? -ne 0 ]; then

@@ -38,6 +38,52 @@ def load_results_json(json_path):
         return None
 
 
+def load_segmentation_metrics(scene_case_dir, iteration='7000'):
+    """
+    Load segmentation metrics for train and test splits.
+    
+    Returns:
+        dict: {'train': {...}, 'test': {...}} or None
+    """
+    results_dir = scene_case_dir / 'results'
+    if not results_dir.exists():
+        return None
+    
+    # Extract scene name and case from directory name
+    dir_name = scene_case_dir.name
+    parts = dir_name.split('_case')
+    if len(parts) != 2:
+        return None
+    
+    scene_name = parts[0]
+    case_id = parts[1]
+    
+    # Construct expected filenames
+    base_name = f"{scene_name}_case{case_id}_iter{iteration}_gt_metrics"
+    train_file = results_dir / f"{base_name}_train.json"
+    test_file = results_dir / f"{base_name}_test.json"
+    
+    seg_metrics = {}
+    
+    # Load train split
+    if train_file.exists():
+        try:
+            with open(train_file, 'r') as f:
+                seg_metrics['train'] = json.load(f)
+        except Exception as e:
+            print(f"Warning: Could not load {train_file}: {e}")
+    
+    # Load test split
+    if test_file.exists():
+        try:
+            with open(test_file, 'r') as f:
+                seg_metrics['test'] = json.load(f)
+        except Exception as e:
+            print(f"Warning: Could not load {test_file}: {e}")
+    
+    return seg_metrics if seg_metrics else None
+
+
 def extract_scene_and_case(dirname):
     """
     Extract scene name and case number from directory name.
@@ -54,12 +100,19 @@ def extract_scene_and_case(dirname):
     return None, None
 
 
-def collect_all_results(results_dir):
+def collect_all_results(results_dir, iteration='7000'):
     """
     Collect all results from scene_case directories.
     
+    Loads:
+    - results.json: RGB metrics (TEST split) and depth metrics (TRAIN split)
+    - segmentation metrics: Both TRAIN and TEST splits
+    
     Returns:
-        dict: {scene_name: {case_id: {method: metrics}}}
+        dict: {scene_name: {case_id: {
+            'rgb_and_depth': {...},  # From results.json
+            'segmentation': {'train': {...}, 'test': {...}}
+        }}}
     """
     results_dir = Path(results_dir)
     all_results = defaultdict(dict)
@@ -69,7 +122,10 @@ def collect_all_results(results_dir):
                              if d.is_dir() and '_case' in d.name])
     
     print(f"Found {len(scene_case_dirs)} scene_case directories")
-    print(f"Collecting results...\n")
+    print(f"Collecting results (iteration: {iteration})...\n")
+    
+    missing_rgb = 0
+    missing_seg = 0
     
     for scene_case_dir in tqdm(scene_case_dirs, desc="Loading results"):
         scene_name, case_id = extract_scene_and_case(scene_case_dir.name)
@@ -77,14 +133,31 @@ def collect_all_results(results_dir):
         if scene_name is None:
             continue
         
-        results_json_path = scene_case_dir / "results.json"
-        if not results_json_path.exists():
-            print(f"Warning: {results_json_path} not found")
-            continue
+        case_results = {}
         
-        results = load_results_json(results_json_path)
-        if results is not None:
-            all_results[scene_name][case_id] = results
+        # Load RGB and depth metrics from results.json
+        results_json_path = scene_case_dir / "results.json"
+        if results_json_path.exists():
+            rgb_depth_results = load_results_json(results_json_path)
+            if rgb_depth_results is not None:
+                case_results['rgb_and_depth'] = rgb_depth_results
+        else:
+            missing_rgb += 1
+        
+        # Load segmentation metrics
+        seg_metrics = load_segmentation_metrics(scene_case_dir, iteration)
+        if seg_metrics:
+            case_results['segmentation'] = seg_metrics
+        else:
+            missing_seg += 1
+        
+        if case_results:
+            all_results[scene_name][case_id] = case_results
+    
+    if missing_rgb > 0:
+        print(f"\n⚠️  Warning: {missing_rgb} cases missing results.json")
+    if missing_seg > 0:
+        print(f"⚠️  Warning: {missing_seg} cases missing segmentation metrics")
     
     return dict(all_results)
 
@@ -94,36 +167,92 @@ def compute_scene_statistics(scene_results):
     Compute statistics for a single scene across all cases.
     
     Args:
-        scene_results: dict {case_id: {method: metrics}}
+        scene_results: dict {case_id: {
+            'rgb_and_depth': {method: metrics},
+            'segmentation': {'train': {...}, 'test': {...}}
+        }}
     
     Returns:
-        dict: {method: {metric: {mean, std, min, max, values}}}
+        dict: {
+            'rgb_test': {method: {metric: stats}},  # PSNR, SSIM, LPIPS on TEST views
+            'depth_train': {method: {metric: stats}},  # Depth metrics on TRAIN views
+            'seg_test': {metric: stats},  # Segmentation on TEST views
+            'seg_train': {metric: stats}  # Segmentation on TRAIN views
+        }
     """
-    # Organize by method and metric
-    method_metrics = defaultdict(lambda: defaultdict(list))
+    # Organize metrics by type and split
+    rgb_metrics = defaultdict(lambda: defaultdict(list))
+    depth_metrics = defaultdict(lambda: defaultdict(list))
+    seg_test_metrics = defaultdict(list)
+    seg_train_metrics = defaultdict(list)
     
-    for case_id, methods in scene_results.items():
-        for method_name, metrics in methods.items():
-            for metric_name, value in metrics.items():
-                if isinstance(value, (int, float)):
-                    method_metrics[method_name][metric_name].append(value)
+    for case_id, case_data in scene_results.items():
+        # Process RGB and depth from results.json
+        if 'rgb_and_depth' in case_data:
+            for method_name, metrics in case_data['rgb_and_depth'].items():
+                for metric_name, value in metrics.items():
+                    if isinstance(value, (int, float)):
+                        # Separate RGB metrics (test) from depth metrics (train)
+                        if metric_name in ['PSNR', 'SSIM', 'LPIPS']:
+                            rgb_metrics[method_name][metric_name].append(value)
+                        elif 'depth' in metric_name.lower() or metric_name in ['abs_rel', 'tau_103', 'sq_rel', 'rmse', 'rmse_log', 'a1', 'a2', 'a3']:
+                            depth_metrics[method_name][metric_name].append(value)
+        
+        # Process segmentation metrics
+        if 'segmentation' in case_data:
+            # Test split segmentation
+            if 'test' in case_data['segmentation']:
+                test_seg = case_data['segmentation']['test']
+                for metric_name, value in test_seg.items():
+                    if isinstance(value, (int, float)):
+                        seg_test_metrics[metric_name].append(value)
+            
+            # Train split segmentation
+            if 'train' in case_data['segmentation']:
+                train_seg = case_data['segmentation']['train']
+                for metric_name, value in train_seg.items():
+                    if isinstance(value, (int, float)):
+                        seg_train_metrics[metric_name].append(value)
     
     # Compute statistics
-    stats = {}
-    for method_name, metrics in method_metrics.items():
-        stats[method_name] = {}
-        for metric_name, values in metrics.items():
-            values = np.array(values)
-            stats[method_name][metric_name] = {
-                'mean': float(np.mean(values)),
-                'std': float(np.std(values)),
-                'min': float(np.min(values)),
-                'max': float(np.max(values)),
-                'count': len(values),
-                'values': values.tolist()
-            }
+    def compute_stats(metrics_dict):
+        stats = {}
+        for key, metrics in metrics_dict.items():
+            stats[key] = {}
+            for metric_name, values in metrics.items():
+                values = np.array(values)
+                if len(values) > 0:
+                    stats[key][metric_name] = {
+                        'mean': float(np.mean(values)),
+                        'std': float(np.std(values)),
+                        'min': float(np.min(values)),
+                        'max': float(np.max(values)),
+                        'count': len(values),
+                        'values': values.tolist()
+                    }
+        return stats
     
-    return stats
+    def compute_single_stats(metrics_dict):
+        stats = {}
+        for metric_name, values in metrics_dict.items():
+            values = np.array(values)
+            if len(values) > 0:
+                stats[metric_name] = {
+                    'mean': float(np.mean(values)),
+                    'std': float(np.std(values)),
+                    'min': float(np.min(values)),
+                    'max': float(np.max(values)),
+                    'count': len(values),
+                    'values': values.tolist()
+                }
+        return stats
+    
+    return {
+        'rgb_test': compute_stats(rgb_metrics),
+        'depth_train': compute_stats(depth_metrics),
+        'seg_test': compute_single_stats(seg_test_metrics),
+        'seg_train': compute_single_stats(seg_train_metrics)
+    }
 
 
 def compute_overall_statistics(all_scene_stats):
@@ -131,58 +260,147 @@ def compute_overall_statistics(all_scene_stats):
     Compute overall statistics across all scenes.
     
     Args:
-        all_scene_stats: dict {scene_name: {method: {metric: stats}}}
+        all_scene_stats: dict {scene_name: {
+            'rgb_test': {...},
+            'depth_train': {...},
+            'seg_test': {...},
+            'seg_train': {...}
+        }}
     
     Returns:
-        dict: {method: {metric: {mean, std, min, max}}}
+        dict: {
+            'rgb_test': {method: {metric: stats}},
+            'depth_train': {method: {metric: stats}},
+            'seg_test': {metric: stats},
+            'seg_train': {metric: stats}
+        }
     """
-    method_metrics = defaultdict(lambda: defaultdict(list))
+    # Organize by split type
+    rgb_overall = defaultdict(lambda: defaultdict(list))
+    depth_overall = defaultdict(lambda: defaultdict(list))
+    seg_test_overall = defaultdict(list)
+    seg_train_overall = defaultdict(list)
     
-    for scene_name, methods in all_scene_stats.items():
-        for method_name, metrics in methods.items():
-            for metric_name, stats in metrics.items():
-                # Use the mean value from each scene
-                method_metrics[method_name][metric_name].append(stats['mean'])
+    for scene_name, scene_stats in all_scene_stats.items():
+        # RGB metrics (test split)
+        if 'rgb_test' in scene_stats:
+            for method_name, metrics in scene_stats['rgb_test'].items():
+                for metric_name, stats in metrics.items():
+                    rgb_overall[method_name][metric_name].append(stats['mean'])
+        
+        # Depth metrics (train split)
+        if 'depth_train' in scene_stats:
+            for method_name, metrics in scene_stats['depth_train'].items():
+                for metric_name, stats in metrics.items():
+                    depth_overall[method_name][metric_name].append(stats['mean'])
+        
+        # Segmentation test
+        if 'seg_test' in scene_stats:
+            for metric_name, stats in scene_stats['seg_test'].items():
+                seg_test_overall[metric_name].append(stats['mean'])
+        
+        # Segmentation train
+        if 'seg_train' in scene_stats:
+            for metric_name, stats in scene_stats['seg_train'].items():
+                seg_train_overall[metric_name].append(stats['mean'])
     
     # Compute overall statistics
-    overall_stats = {}
-    for method_name, metrics in method_metrics.items():
-        overall_stats[method_name] = {}
-        for metric_name, values in metrics.items():
-            values = np.array(values)
-            overall_stats[method_name][metric_name] = {
-                'mean': float(np.mean(values)),
-                'std': float(np.std(values)),
-                'min': float(np.min(values)),
-                'max': float(np.max(values)),
-                'count': len(values)
-            }
+    def compute_method_stats(metrics_dict):
+        stats = {}
+        for method_name, metrics in metrics_dict.items():
+            stats[method_name] = {}
+            for metric_name, values in metrics.items():
+                values = np.array(values)
+                if len(values) > 0:
+                    stats[method_name][metric_name] = {
+                        'mean': float(np.mean(values)),
+                        'std': float(np.std(values)),
+                        'min': float(np.min(values)),
+                        'max': float(np.max(values)),
+                        'count': len(values)
+                    }
+        return stats
     
-    return overall_stats
+    def compute_single_stats(metrics_dict):
+        stats = {}
+        for metric_name, values in metrics_dict.items():
+            values = np.array(values)
+            if len(values) > 0:
+                stats[metric_name] = {
+                    'mean': float(np.mean(values)),
+                    'std': float(np.std(values)),
+                    'min': float(np.min(values)),
+                    'max': float(np.max(values)),
+                    'count': len(values)
+                }
+        return stats
+    
+    return {
+        'rgb_test': compute_method_stats(rgb_overall),
+        'depth_train': compute_method_stats(depth_overall),
+        'seg_test': compute_single_stats(seg_test_overall),
+        'seg_train': compute_single_stats(seg_train_overall)
+    }
 
 
-def print_results_table(stats, title="Results"):
-    """Print results in a formatted table."""
+def print_results_table(overall_stats, title="Overall Results"):
+    """Print results in a formatted table with clear train/test split labels."""
     print(f"\n{'='*80}")
     print(f"{title:^80}")
     print(f"{'='*80}")
     
-    for method_name, metrics in stats.items():
-        print(f"\n{method_name}:")
+    # Print RGB metrics (TEST split)
+    if 'rgb_test' in overall_stats and overall_stats['rgb_test']:
+        print(f"\n{'RGB METRICS (TEST SPLIT - Novel View Synthesis)':^80}")
+        print(f"{'='*80}")
+        for method_name, metrics in overall_stats['rgb_test'].items():
+            print(f"\n{method_name}:")
+            print(f"  {'Metric':<15} {'Mean':>12} {'Std':>12} {'Min':>12} {'Max':>12}")
+            print(f"  {'-'*63}")
+            
+            for metric_name in ['PSNR', 'SSIM', 'LPIPS']:
+                if metric_name in metrics:
+                    stat = metrics[metric_name]
+                    print(f"  {metric_name:<15} {stat['mean']:>12.4f} {stat['std']:>12.4f} "
+                          f"{stat['min']:>12.4f} {stat['max']:>12.4f}")
+    
+    # Print Depth metrics (TRAIN split)
+    if 'depth_train' in overall_stats and overall_stats['depth_train']:
+        print(f"\n{'DEPTH METRICS (TRAIN SPLIT - Training Views)':^80}")
+        print(f"{'='*80}")
+        for method_name, metrics in overall_stats['depth_train'].items():
+            print(f"\n{method_name}:")
+            print(f"  {'Metric':<15} {'Mean':>12} {'Std':>12} {'Min':>12} {'Max':>12}")
+            print(f"  {'-'*63}")
+            
+            depth_order = ['abs_rel', 'tau_103', 'sq_rel', 'rmse', 'rmse_log', 'a1', 'a2', 'a3']
+            for metric_name in depth_order:
+                if metric_name in metrics:
+                    stat = metrics[metric_name]
+                    print(f"  {metric_name:<15} {stat['mean']:>12.4f} {stat['std']:>12.4f} "
+                          f"{stat['min']:>12.4f} {stat['max']:>12.4f}")
+    
+    # Print Segmentation metrics (TEST split)
+    if 'seg_test' in overall_stats and overall_stats['seg_test']:
+        print(f"\n{'SEGMENTATION METRICS (TEST SPLIT)':^80}")
+        print(f"{'='*80}")
         print(f"  {'Metric':<15} {'Mean':>12} {'Std':>12} {'Min':>12} {'Max':>12}")
         print(f"  {'-'*63}")
         
-        # Sort metrics for consistent ordering
-        metric_order = ['PSNR', 'SSIM', 'LPIPS', 'abs_rel', 'tau_103', 'sq_rel', 
-                       'rmse', 'rmse_log', 'a1', 'a2', 'a3', 'depth_abs_rel', 
-                       'depth_tau_103', 'depth_sq_rel', 'depth_rmse', 
-                       'depth_rmse_log', 'depth_a1', 'depth_a2', 'depth_a3']
+        for metric_name in sorted(overall_stats['seg_test'].keys()):
+            stat = overall_stats['seg_test'][metric_name]
+            print(f"  {metric_name:<15} {stat['mean']:>12.4f} {stat['std']:>12.4f} "
+                  f"{stat['min']:>12.4f} {stat['max']:>12.4f}")
+    
+    # Print Segmentation metrics (TRAIN split)
+    if 'seg_train' in overall_stats and overall_stats['seg_train']:
+        print(f"\n{'SEGMENTATION METRICS (TRAIN SPLIT)':^80}")
+        print(f"{'='*80}")
+        print(f"  {'Metric':<15} {'Mean':>12} {'Std':>12} {'Min':>12} {'Max':>12}")
+        print(f"  {'-'*63}")
         
-        sorted_metrics = sorted(metrics.keys(), 
-                               key=lambda x: metric_order.index(x) if x in metric_order else 999)
-        
-        for metric_name in sorted_metrics:
-            stat = metrics[metric_name]
+        for metric_name in sorted(overall_stats['seg_train'].keys()):
+            stat = overall_stats['seg_train'][metric_name]
             print(f"  {metric_name:<15} {stat['mean']:>12.4f} {stat['std']:>12.4f} "
                   f"{stat['min']:>12.4f} {stat['max']:>12.4f}")
 
@@ -202,50 +420,118 @@ def save_summary_json(output_path, scene_stats, overall_stats, metadata):
 
 
 def save_latex_table(output_path, overall_stats):
-    """Save results in LaTeX table format."""
+    """Save results in LaTeX table format with clear train/test split labels."""
     with open(output_path, 'w') as f:
         f.write("% Feature-3DGS Test Results\n")
-        f.write("\\begin{table}[h]\n")
-        f.write("\\centering\n")
-        f.write("\\begin{tabular}{lcccc}\n")
-        f.write("\\hline\n")
-        f.write("Metric & Mean & Std & Min & Max \\\\\n")
-        f.write("\\hline\n")
+        f.write("% NOTE: RGB metrics are on TEST split, depth metrics on TRAIN split\n\n")
         
-        for method_name, metrics in overall_stats.items():
-            f.write(f"\\multicolumn{{5}}{{c}}{{\\textbf{{{method_name}}}}} \\\\\n")
+        # RGB metrics table (TEST split)
+        if 'rgb_test' in overall_stats and overall_stats['rgb_test']:
+            f.write("% RGB Metrics (Novel View Synthesis - TEST Split)\n")
+            f.write("\\begin{table}[h]\n")
+            f.write("\\centering\n")
+            f.write("\\begin{tabular}{lcccc}\n")
+            f.write("\\hline\n")
+            f.write("Metric & Mean & Std & Min & Max \\\\\n")
             f.write("\\hline\n")
             
-            metric_order = ['PSNR', 'SSIM', 'LPIPS', 'abs_rel', 'tau_103', 
-                           'rmse', 'rmse_log', 'a1', 'a2', 'a3']
+            for method_name, metrics in overall_stats['rgb_test'].items():
+                f.write(f"\\multicolumn{{5}}{{c}}{{\\textbf{{{method_name}}}}} \\\\\n")
+                f.write("\\hline\n")
+                
+                for metric_name in ['PSNR', 'SSIM', 'LPIPS']:
+                    if metric_name in metrics:
+                        stat = metrics[metric_name]
+                        f.write(f"{metric_name} & {stat['mean']:.4f} & {stat['std']:.4f} & "
+                               f"{stat['min']:.4f} & {stat['max']:.4f} \\\\\n")
+                
+                f.write("\\hline\n")
             
-            for metric_name in metric_order:
-                if metric_name in metrics:
-                    stat = metrics[metric_name]
-                    f.write(f"{metric_name} & {stat['mean']:.4f} & {stat['std']:.4f} & "
-                           f"{stat['min']:.4f} & {stat['max']:.4f} \\\\\n")
+            f.write("\\end{tabular}\n")
+            f.write("\\caption{RGB metrics on TEST split (novel view synthesis)}\n")
+            f.write("\\end{table}\n\n")
+        
+        # Segmentation table (TEST split)
+        if 'seg_test' in overall_stats and overall_stats['seg_test']:
+            f.write("% Segmentation Metrics (TEST Split)\n")
+            f.write("\\begin{table}[h]\n")
+            f.write("\\centering\n")
+            f.write("\\begin{tabular}{lcccc}\n")
+            f.write("\\hline\n")
+            f.write("Metric & Mean & Std & Min & Max \\\\\n")
+            f.write("\\hline\n")
+            
+            for metric_name in sorted(overall_stats['seg_test'].keys()):
+                stat = overall_stats['seg_test'][metric_name]
+                f.write(f"{metric_name} & {stat['mean']:.4f} & {stat['std']:.4f} & "
+                       f"{stat['min']:.4f} & {stat['max']:.4f} \\\\\n")
             
             f.write("\\hline\n")
-        
-        f.write("\\end{tabular}\n")
-        f.write("\\caption{Feature-3DGS evaluation results on ScanNet test set}\n")
-        f.write("\\end{table}\n")
+            f.write("\\end{tabular}\n")
+            f.write("\\caption{Segmentation metrics on TEST split}\n")
+            f.write("\\end{table}\n")
     
     print(f"✅ LaTeX table saved to: {output_path}")
 
 
 def save_csv(output_path, overall_stats):
-    """Save results in CSV format."""
+    """Save results in CSV format with split labels."""
     import csv
     
     with open(output_path, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['Method', 'Metric', 'Mean', 'Std', 'Min', 'Max', 'Count'])
+        writer.writerow(['Split', 'Method', 'Metric', 'Mean', 'Std', 'Min', 'Max', 'Count'])
         
-        for method_name, metrics in overall_stats.items():
-            for metric_name, stat in sorted(metrics.items()):
+        # RGB metrics (TEST split)
+        if 'rgb_test' in overall_stats:
+            for method_name, metrics in overall_stats['rgb_test'].items():
+                for metric_name, stat in sorted(metrics.items()):
+                    writer.writerow([
+                        'RGB_TEST',
+                        method_name,
+                        metric_name,
+                        f"{stat['mean']:.6f}",
+                        f"{stat['std']:.6f}",
+                        f"{stat['min']:.6f}",
+                        f"{stat['max']:.6f}",
+                        stat['count']
+                    ])
+        
+        # Depth metrics (TRAIN split)
+        if 'depth_train' in overall_stats:
+            for method_name, metrics in overall_stats['depth_train'].items():
+                for metric_name, stat in sorted(metrics.items()):
+                    writer.writerow([
+                        'DEPTH_TRAIN',
+                        method_name,
+                        metric_name,
+                        f"{stat['mean']:.6f}",
+                        f"{stat['std']:.6f}",
+                        f"{stat['min']:.6f}",
+                        f"{stat['max']:.6f}",
+                        stat['count']
+                    ])
+        
+        # Segmentation TEST
+        if 'seg_test' in overall_stats:
+            for metric_name, stat in sorted(overall_stats['seg_test'].items()):
                 writer.writerow([
-                    method_name,
+                    'SEG_TEST',
+                    '-',
+                    metric_name,
+                    f"{stat['mean']:.6f}",
+                    f"{stat['std']:.6f}",
+                    f"{stat['min']:.6f}",
+                    f"{stat['max']:.6f}",
+                    stat['count']
+                ])
+        
+        # Segmentation TRAIN
+        if 'seg_train' in overall_stats:
+            for metric_name, stat in sorted(overall_stats['seg_train'].items()):
+                writer.writerow([
+                    'SEG_TRAIN',
+                    '-',
                     metric_name,
                     f"{stat['mean']:.6f}",
                     f"{stat['std']:.6f}",
@@ -260,12 +546,22 @@ def save_csv(output_path, overall_stats):
 def main():
     parser = argparse.ArgumentParser(
         description="Aggregate test results from feature-3dgs evaluation",
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+NOTE: Metrics are separated by train/test split:
+  - RGB metrics (PSNR, SSIM, LPIPS): TEST split (novel view synthesis)
+  - Depth metrics: TRAIN split (training/reference views)  
+  - Segmentation metrics: Both TRAIN and TEST splits
+
+This separation is important for fair comparison with other methods.
+        """
     )
     parser.add_argument('--results_dir', '-r', type=str, required=True,
                        help='Directory containing scene_case subdirectories with results')
     parser.add_argument('--output_dir', '-o', type=str, default=None,
                        help='Output directory for summary files (default: results_dir)')
+    parser.add_argument('--iteration', '-i', type=str, default='7000',
+                       help='Iteration number for segmentation metrics (default: 7000)')
     parser.add_argument('--formats', nargs='+', default=['json', 'csv', 'latex'],
                        choices=['json', 'csv', 'latex'],
                        help='Output formats (default: all)')
@@ -285,10 +581,11 @@ def main():
     print(f"{'='*80}")
     print(f"Results directory: {results_dir}")
     print(f"Output directory:  {output_dir}")
+    print(f"Iteration:         {args.iteration}")
     print(f"{'='*80}\n")
     
     # Collect all results
-    all_results = collect_all_results(results_dir)
+    all_results = collect_all_results(results_dir, args.iteration)
     
     if not all_results:
         print("❌ No results found!")
@@ -349,6 +646,12 @@ def main():
         print(f"  - summary_statistics.csv    (overall stats in CSV format)")
     if 'latex' in args.formats:
         print(f"  - summary_table.tex         (LaTeX table for papers)")
+    print()
+    print("⚠️  IMPORTANT - Train/Test Split Information:")
+    print("  • RGB metrics (PSNR, SSIM, LPIPS): TEST split (novel views)")
+    print("  • Depth metrics: TRAIN split (reference/training views)")
+    print("  • Segmentation: Both TRAIN and TEST splits reported")
+    print("  → Use TEST split metrics for paper comparisons!")
     print()
 
 
