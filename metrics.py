@@ -185,15 +185,14 @@ def readDepthMaps(pred_depth_dir, gt_depth_dir=None, json_split_path=None, case_
 
 def compute_depth_metrics(pred, gt, min_depth=0.1, max_depth=100.0, use_scale_alignment=True):
     """
-    Compute depth evaluation metrics following LSM paper and DUSt3R.
+    Compute depth evaluation metrics following VGGT/DUSt3R standard.
     
-    LSM paper: "We normalize the predicted point maps using the median of the predicted 
-    depths and similarly normalize the ground truth depths, following procedures 
-    established in previous literature to align the two sets of depth maps."
+    IMPORTANT: This implementation exactly matches the VGGT losses.py calculate_depth_metrics()
+    for consistent comparison across methods.
     
     Metrics computed:
     - abs_rel (rel): Absolute Relative Error (main metric in LSM)
-    - tau (inlier_ratio): Inlier Ratio with threshold 1.03 (main metric in LSM)
+    - tau_103 (inlier_ratio): Inlier Ratio with threshold 1.03 (main metric in LSM)
     - sq_rel: Squared relative error  
     - rmse: Root mean squared error
     - rmse_log: RMSE of log depth
@@ -202,83 +201,78 @@ def compute_depth_metrics(pred, gt, min_depth=0.1, max_depth=100.0, use_scale_al
     Args:
         pred: Predicted depth map (H, W)
         gt: Ground truth depth map (H, W)
-        min_depth: Minimum valid depth (default 0.1m, per LSM paper)
-        max_depth: Maximum valid depth (default 100m, per LSM paper)
-        use_scale_alignment: If True, apply median normalization for scale alignment (LSM/DUSt3R)
+        min_depth: Minimum valid depth (not used, kept for API compatibility)
+        max_depth: Maximum valid depth (not used, kept for API compatibility)
+        use_scale_alignment: If True, apply median normalization (default True)
         
     Returns:
-        dict: Dictionary of computed metrics
+        dict: Dictionary of computed metrics, or None if no valid pixels
     """
-    # Clip depth to valid range (LSM paper: "depth estimates are clipped to a range of 0.1 m to 100 m")
-    pred = torch.clamp(pred, min_depth, max_depth)
-    gt = torch.clamp(gt, min_depth, max_depth)
+    # Create mask - EXACT MATCH to VGGT losses.py line 50
+    mask = (gt > 0) & (pred > 0)
     
-    # Create valid mask
-    valid_mask = (gt > min_depth) & (gt < max_depth) & torch.isfinite(gt) & torch.isfinite(pred)
-    valid_mask = valid_mask & (pred > 0)
+    # Apply mask
+    gt_depth_masked = gt[mask]
+    pred_depth_masked = pred[mask]
     
-    if valid_mask.sum() == 0:
+    # Avoid division by zero and handle empty masks
+    if gt_depth_masked.numel() == 0 or pred_depth_masked.numel() == 0:
         return None
     
-    pred = pred[valid_mask]
-    gt = gt[valid_mask]
+    # Calculate medians
+    median_gt = torch.median(gt_depth_masked)
+    median_pred = torch.median(pred_depth_masked)
     
-    # Scale alignment using median normalization (following LSM/DUSt3R)
-    if use_scale_alignment:
-        # Normalize by median to align scales
-        pred_median = torch.median(pred)
-        gt_median = torch.median(gt)
-        
-        if pred_median > 0 and gt_median > 0:
-            pred_normalized = pred / pred_median
-            gt_normalized = gt / gt_median
-        else:
-            pred_normalized = pred
-            gt_normalized = gt
-    else:
-        pred_normalized = pred
-        gt_normalized = gt
+    if torch.isclose(median_pred, torch.tensor(0.0)):
+        return None
     
-    # === LSM/DUSt3R Metrics ===
+    # Scale alignment using median normalization - EXACT MATCH to VGGT
+    # Scale pred to match GT (lines 67-70 in VGGT losses.py)
+    scale = median_gt / median_pred
+    pred_depth_masked = pred_depth_masked * scale
     
-    # Absolute relative error (main metric in LSM paper)
-    abs_rel = torch.mean(torch.abs(gt_normalized - pred_normalized) / gt_normalized)
+    # === Primary Metrics (matching VGGT exactly) ===
     
-    # Inlier Ratio with threshold 1.03 (main metric in LSM paper)
-    # tau: percentage of pixels where relative error is within threshold
-    relative_diff = torch.max(
-        (gt_normalized / (pred_normalized + 1e-8)),
-        (pred_normalized / (gt_normalized + 1e-8))
-    )
-    tau_103 = (relative_diff < 1.03).float().mean()  # LSM threshold
+    # Absolute relative error - EXACT MATCH to VGGT line 73
+    rel_err = torch.abs(gt_depth_masked - pred_depth_masked) / gt_depth_masked
+    
+    # Avoid NaN in relative error - EXACT MATCH to VGGT line 76
+    rel_err[torch.isnan(rel_err)] = 0
+    
+    # Tau metric - EXACT MATCH to VGGT lines 78-81
+    ratio = torch.max(pred_depth_masked / gt_depth_masked, 
+                      gt_depth_masked / pred_depth_masked)
+    tau_103 = (ratio < 1.03).float().mean()
     
     # === Additional Standard Metrics ===
     
     # Squared relative error
-    sq_rel = torch.mean(((gt_normalized - pred_normalized) ** 2) / gt_normalized)
+    sq_rel = torch.mean(((gt_depth_masked - pred_depth_masked) ** 2) / gt_depth_masked)
     
     # RMSE
-    rmse = torch.sqrt(torch.mean((gt_normalized - pred_normalized) ** 2))
+    rmse = torch.sqrt(torch.mean((gt_depth_masked - pred_depth_masked) ** 2))
     
-    # RMSE log
-    rmse_log = torch.sqrt(torch.mean((torch.log(gt_normalized) - torch.log(pred_normalized + 1e-8)) ** 2))
+    # RMSE log (add small epsilon to avoid log(0))
+    rmse_log = torch.sqrt(torch.mean((torch.log(gt_depth_masked + 1e-8) - 
+                                      torch.log(pred_depth_masked + 1e-8)) ** 2))
     
     # Threshold accuracies (Eigen et al. 2014)
-    thresh = torch.max((gt_normalized / (pred_normalized + 1e-8)), (pred_normalized / (gt_normalized + 1e-8)))
+    thresh = torch.max((gt_depth_masked / (pred_depth_masked + 1e-8)), 
+                       (pred_depth_masked / (gt_depth_masked + 1e-8)))
     a1 = (thresh < 1.25).float().mean()
     a2 = (thresh < 1.25 ** 2).float().mean()
     a3 = (thresh < 1.25 ** 3).float().mean()
     
-    # Return metrics (LSM paper reports rel and tau as percentages)
+    # Return metrics (multiply by 100 to match VGGT format)
     return {
-        'abs_rel': abs_rel.item() * 100.0,  # Convert to percent (LSM format)
-        'tau_103': tau_103.item() * 100.0,  # Convert to percent (LSM format)
+        'abs_rel': (rel_err.mean() * 100).item(),  # EXACT MATCH to VGGT return format
+        'tau_103': (tau_103 * 100).item(),         # EXACT MATCH to VGGT return format
         'sq_rel': sq_rel.item(),
         'rmse': rmse.item(),
         'rmse_log': rmse_log.item(),
-        'a1': a1.item() * 100.0,  # Convert to percent for consistency
-        'a2': a2.item() * 100.0,  # Convert to percent for consistency
-        'a3': a3.item() * 100.0   # Convert to percent for consistency
+        'a1': a1.item() * 100.0,
+        'a2': a2.item() * 100.0,
+        'a3': a3.item() * 100.0
     }
 
 def evaluate(model_paths, eval_depth=False, gt_depth_dir=None, min_depth=0.1, max_depth=100.0, 

@@ -533,25 +533,29 @@ def save_latex_table(output_path, overall_stats):
             f.write("\\caption{RGB metrics on TEST split (novel view synthesis)}\n")
             f.write("\\end{table}\n\n")
         
-        # Segmentation table (TEST split)
+        # Segmentation table (TEST split) - per iteration
         if 'seg_test' in overall_stats and overall_stats['seg_test']:
-            f.write("% Segmentation Metrics (TEST Split)\n")
-            f.write("\\begin{table}[h]\n")
-            f.write("\\centering\n")
-            f.write("\\begin{tabular}{lcccc}\n")
-            f.write("\\hline\n")
-            f.write("Metric & Mean & Std & Min & Max \\\\\n")
-            f.write("\\hline\n")
-            
-            for metric_name in sorted(overall_stats['seg_test'].keys()):
-                stat = overall_stats['seg_test'][metric_name]
-                f.write(f"{metric_name} & {stat['mean']:.4f} & {stat['std']:.4f} & "
-                       f"{stat['min']:.4f} & {stat['max']:.4f} \\\\\n")
-            
-            f.write("\\hline\n")
-            f.write("\\end{tabular}\n")
-            f.write("\\caption{Segmentation metrics on TEST split}\n")
-            f.write("\\end{table}\n")
+            f.write("% Segmentation Metrics (TEST Split - per iteration)\n")
+            for iter_key in sorted(overall_stats['seg_test'].keys()):
+                metrics = overall_stats['seg_test'][iter_key]
+                iteration = iter_key.replace('iter_', '')
+                
+                f.write(f"\\begin{{table}}[h]\n")
+                f.write("\\centering\n")
+                f.write("\\begin{tabular}{lcccc}\n")
+                f.write("\\hline\n")
+                f.write("Metric & Mean & Std & Min & Max \\\\\n")
+                f.write("\\hline\n")
+                
+                for metric_name in sorted(metrics.keys()):
+                    stat = metrics[metric_name]
+                    f.write(f"{metric_name} & {stat['mean']:.4f} & {stat['std']:.4f} & "
+                           f"{stat['min']:.4f} & {stat['max']:.4f} \\\\\n")
+                
+                f.write("\\hline\n")
+                f.write("\\end{tabular}\n")
+                f.write(f"\\caption{{Segmentation metrics on TEST split (iteration {iteration})}}\n")
+                f.write("\\end{table}\n\n")
     
     print(f"✅ LaTeX table saved to: {output_path}")
 
@@ -562,14 +566,16 @@ def save_csv(output_path, overall_stats):
     
     with open(output_path, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['Split', 'Method', 'Metric', 'Mean', 'Std', 'Min', 'Max', 'Count'])
+        writer.writerow(['Split', 'Iteration', 'Method', 'Metric', 'Mean', 'Std', 'Min', 'Max', 'Count'])
         
         # RGB metrics (TEST split)
         if 'rgb_test' in overall_stats:
             for method_name, metrics in overall_stats['rgb_test'].items():
+                iteration = method_name.replace('ours_', '')
                 for metric_name, stat in sorted(metrics.items()):
                     writer.writerow([
                         'RGB_TEST',
+                        iteration,
                         method_name,
                         metric_name,
                         f"{stat['mean']:.6f}",
@@ -582,9 +588,11 @@ def save_csv(output_path, overall_stats):
         # Depth metrics (TRAIN split)
         if 'depth_train' in overall_stats:
             for method_name, metrics in overall_stats['depth_train'].items():
+                iteration = method_name.replace('ours_', '')
                 for metric_name, stat in sorted(metrics.items()):
                     writer.writerow([
                         'DEPTH_TRAIN',
+                        iteration,
                         method_name,
                         metric_name,
                         f"{stat['mean']:.6f}",
@@ -594,33 +602,39 @@ def save_csv(output_path, overall_stats):
                         stat['count']
                     ])
         
-        # Segmentation TEST
+        # Segmentation TEST (per iteration)
         if 'seg_test' in overall_stats:
-            for metric_name, stat in sorted(overall_stats['seg_test'].items()):
-                writer.writerow([
-                    'SEG_TEST',
-                    '-',
-                    metric_name,
-                    f"{stat['mean']:.6f}",
-                    f"{stat['std']:.6f}",
-                    f"{stat['min']:.6f}",
-                    f"{stat['max']:.6f}",
-                    stat['count']
-                ])
+            for iter_key, metrics in sorted(overall_stats['seg_test'].items()):
+                iteration = iter_key.replace('iter_', '')
+                for metric_name, stat in sorted(metrics.items()):
+                    writer.writerow([
+                        'SEG_TEST',
+                        iteration,
+                        '-',
+                        metric_name,
+                        f"{stat['mean']:.6f}",
+                        f"{stat['std']:.6f}",
+                        f"{stat['min']:.6f}",
+                        f"{stat['max']:.6f}",
+                        stat['count']
+                    ])
         
-        # Segmentation TRAIN
+        # Segmentation TRAIN (per iteration)
         if 'seg_train' in overall_stats:
-            for metric_name, stat in sorted(overall_stats['seg_train'].items()):
-                writer.writerow([
-                    'SEG_TRAIN',
-                    '-',
-                    metric_name,
-                    f"{stat['mean']:.6f}",
-                    f"{stat['std']:.6f}",
-                    f"{stat['min']:.6f}",
-                    f"{stat['max']:.6f}",
-                    stat['count']
-                ])
+            for iter_key, metrics in sorted(overall_stats['seg_train'].items()):
+                iteration = iter_key.replace('iter_', '')
+                for metric_name, stat in sorted(metrics.items()):
+                    writer.writerow([
+                        'SEG_TRAIN',
+                        iteration,
+                        '-',
+                        metric_name,
+                        f"{stat['mean']:.6f}",
+                        f"{stat['std']:.6f}",
+                        f"{stat['min']:.6f}",
+                        f"{stat['max']:.6f}",
+                        stat['count']
+                    ])
     
     print(f"✅ CSV saved to: {output_path}")
 
