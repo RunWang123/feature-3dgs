@@ -38,13 +38,17 @@ def load_results_json(json_path):
         return None
 
 
-def load_segmentation_metrics(scene_case_dir, iteration='7000'):
+def load_segmentation_metrics_all_iterations(scene_case_dir):
     """
-    Load segmentation metrics for train and test splits.
+    Load segmentation metrics for ALL iterations (2000, 3000, 4000, 5000, 6000, 7000).
     Filters out metadata fields to keep only actual metrics.
     
     Returns:
-        dict: {'train': {...}, 'test': {...}} or None
+        dict: {
+            'iter_2000': {'train': {...}, 'test': {...}},
+            'iter_3000': {'train': {...}, 'test': {...}},
+            ...
+        } or None
     """
     results_dir = scene_case_dir / 'results'
     if not results_dir.exists():
@@ -59,15 +63,13 @@ def load_segmentation_metrics(scene_case_dir, iteration='7000'):
     scene_name = parts[0]
     case_id = parts[1]
     
-    # Construct expected filenames (use gt_metrics, not teacher_student_metrics)
-    base_name = f"{scene_name}_case{case_id}_iter{iteration}_gt_metrics"
-    train_file = results_dir / f"{base_name}_train.json"
-    test_file = results_dir / f"{base_name}_test.json"
+    # All iterations to check
+    iterations = ['2000', '3000', '4000', '5000', '6000', '7000']
     
     # Metadata fields to exclude (not actual metrics)
     metadata_fields = {
         'iteration', 'num_classes', 'num_samples', 'labels', 
-        'split', 'scene_name', 'case_id', 'timestamp'
+        'split', 'scene_name', 'case_id', 'timestamp', 'model_path', 'scene_path'
     }
     
     def filter_metrics(data):
@@ -95,31 +97,42 @@ def load_segmentation_metrics(scene_case_dir, iteration='7000'):
         
         return filtered
     
-    seg_metrics = {}
+    all_seg_metrics = {}
     
-    # Load train split
-    if train_file.exists():
-        try:
-            with open(train_file, 'r') as f:
-                data = json.load(f)
-                filtered = filter_metrics(data)
-                if filtered:
-                    seg_metrics['train'] = filtered
-        except Exception as e:
-            print(f"Warning: Could not load {train_file}: {e}")
+    for iteration in iterations:
+        # Construct expected filenames (use gt_metrics, not teacher_student_metrics)
+        base_name = f"{scene_name}_case{case_id}_iter{iteration}_gt_metrics"
+        train_file = results_dir / f"{base_name}_train.json"
+        test_file = results_dir / f"{base_name}_test.json"
+        
+        iter_metrics = {}
+        
+        # Load train split
+        if train_file.exists():
+            try:
+                with open(train_file, 'r') as f:
+                    data = json.load(f)
+                    filtered = filter_metrics(data)
+                    if filtered:
+                        iter_metrics['train'] = filtered
+            except Exception as e:
+                pass  # Silently skip missing files
+        
+        # Load test split
+        if test_file.exists():
+            try:
+                with open(test_file, 'r') as f:
+                    data = json.load(f)
+                    filtered = filter_metrics(data)
+                    if filtered:
+                        iter_metrics['test'] = filtered
+            except Exception as e:
+                pass  # Silently skip missing files
+        
+        if iter_metrics:
+            all_seg_metrics[f'iter_{iteration}'] = iter_metrics
     
-    # Load test split
-    if test_file.exists():
-        try:
-            with open(test_file, 'r') as f:
-                data = json.load(f)
-                filtered = filter_metrics(data)
-                if filtered:
-                    seg_metrics['test'] = filtered
-        except Exception as e:
-            print(f"Warning: Could not load {test_file}: {e}")
-    
-    return seg_metrics if seg_metrics else None
+    return all_seg_metrics if all_seg_metrics else None
 
 
 def extract_scene_and_case(dirname):
@@ -138,18 +151,22 @@ def extract_scene_and_case(dirname):
     return None, None
 
 
-def collect_all_results(results_dir, iteration='7000'):
+def collect_all_results(results_dir):
     """
     Collect all results from scene_case directories.
     
     Loads:
-    - results.json: RGB metrics (TEST split) and depth metrics (TRAIN split)
-    - segmentation metrics: Both TRAIN and TEST splits
+    - results.json: RGB metrics (TEST split) and depth metrics (TRAIN split) for all iterations
+    - segmentation metrics: Both TRAIN and TEST splits for all iterations
     
     Returns:
         dict: {scene_name: {case_id: {
             'rgb_and_depth': {...},  # From results.json
-            'segmentation': {'train': {...}, 'test': {...}}
+            'segmentation': {
+                'iter_2000': {'train': {...}, 'test': {...}},
+                'iter_3000': {'train': {...}, 'test': {...}},
+                ...
+            }
         }}}
     """
     results_dir = Path(results_dir)
@@ -160,7 +177,7 @@ def collect_all_results(results_dir, iteration='7000'):
                              if d.is_dir() and '_case' in d.name])
     
     print(f"Found {len(scene_case_dirs)} scene_case directories")
-    print(f"Collecting results (iteration: {iteration})...\n")
+    print(f"Collecting results for all iterations...\n")
     
     missing_rgb = 0
     missing_seg = 0
@@ -182,8 +199,8 @@ def collect_all_results(results_dir, iteration='7000'):
         else:
             missing_rgb += 1
         
-        # Load segmentation metrics
-        seg_metrics = load_segmentation_metrics(scene_case_dir, iteration)
+        # Load segmentation metrics for ALL iterations
+        seg_metrics = load_segmentation_metrics_all_iterations(scene_case_dir)
         if seg_metrics:
             case_results['segmentation'] = seg_metrics
         else:
@@ -207,22 +224,26 @@ def compute_scene_statistics(scene_results):
     Args:
         scene_results: dict {case_id: {
             'rgb_and_depth': {method: metrics},
-            'segmentation': {'train': {...}, 'test': {...}}
+            'segmentation': {
+                'iter_2000': {'train': {...}, 'test': {...}},
+                'iter_3000': {'train': {...}, 'test': {...}},
+                ...
+            }
         }}
     
     Returns:
         dict: {
             'rgb_test': {method: {metric: stats}},  # PSNR, SSIM, LPIPS on TEST views
             'depth_train': {method: {metric: stats}},  # Depth metrics on TRAIN views
-            'seg_test': {metric: stats},  # Segmentation on TEST views
-            'seg_train': {metric: stats}  # Segmentation on TRAIN views
+            'seg_test': {iteration: {metric: stats}},  # Segmentation on TEST views per iteration
+            'seg_train': {iteration: {metric: stats}}  # Segmentation on TRAIN views per iteration
         }
     """
     # Organize metrics by type and split
     rgb_metrics = defaultdict(lambda: defaultdict(list))
     depth_metrics = defaultdict(lambda: defaultdict(list))
-    seg_test_metrics = defaultdict(list)
-    seg_train_metrics = defaultdict(list)
+    seg_test_metrics = defaultdict(lambda: defaultdict(list))  # iteration -> metric -> values
+    seg_train_metrics = defaultdict(lambda: defaultdict(list))  # iteration -> metric -> values
     
     for case_id, case_data in scene_results.items():
         # Process RGB and depth from results.json
@@ -236,21 +257,22 @@ def compute_scene_statistics(scene_results):
                         elif 'depth' in metric_name.lower() or metric_name in ['abs_rel', 'tau_103', 'sq_rel', 'rmse', 'rmse_log', 'a1', 'a2', 'a3']:
                             depth_metrics[method_name][metric_name].append(value)
         
-        # Process segmentation metrics
+        # Process segmentation metrics (per iteration)
         if 'segmentation' in case_data:
-            # Test split segmentation
-            if 'test' in case_data['segmentation']:
-                test_seg = case_data['segmentation']['test']
-                for metric_name, value in test_seg.items():
-                    if isinstance(value, (int, float)):
-                        seg_test_metrics[metric_name].append(value)
-            
-            # Train split segmentation
-            if 'train' in case_data['segmentation']:
-                train_seg = case_data['segmentation']['train']
-                for metric_name, value in train_seg.items():
-                    if isinstance(value, (int, float)):
-                        seg_train_metrics[metric_name].append(value)
+            for iter_key, iter_data in case_data['segmentation'].items():
+                # Test split segmentation
+                if 'test' in iter_data:
+                    test_seg = iter_data['test']
+                    for metric_name, value in test_seg.items():
+                        if isinstance(value, (int, float)):
+                            seg_test_metrics[iter_key][metric_name].append(value)
+                
+                # Train split segmentation
+                if 'train' in iter_data:
+                    train_seg = iter_data['train']
+                    for metric_name, value in train_seg.items():
+                        if isinstance(value, (int, float)):
+                            seg_train_metrics[iter_key][metric_name].append(value)
     
     # Compute statistics
     def compute_stats(metrics_dict):
@@ -270,26 +292,29 @@ def compute_scene_statistics(scene_results):
                     }
         return stats
     
-    def compute_single_stats(metrics_dict):
+    def compute_iter_stats(seg_metrics_dict):
+        """Compute stats for per-iteration segmentation metrics."""
         stats = {}
-        for metric_name, values in metrics_dict.items():
-            values = np.array(values)
-            if len(values) > 0:
-                stats[metric_name] = {
-                    'mean': float(np.mean(values)),
-                    'std': float(np.std(values)),
-                    'min': float(np.min(values)),
-                    'max': float(np.max(values)),
-                    'count': len(values),
-                    'values': values.tolist()
-                }
+        for iter_key, metrics in seg_metrics_dict.items():
+            stats[iter_key] = {}
+            for metric_name, values in metrics.items():
+                values = np.array(values)
+                if len(values) > 0:
+                    stats[iter_key][metric_name] = {
+                        'mean': float(np.mean(values)),
+                        'std': float(np.std(values)),
+                        'min': float(np.min(values)),
+                        'max': float(np.max(values)),
+                        'count': len(values),
+                        'values': values.tolist()
+                    }
         return stats
     
     return {
         'rgb_test': compute_stats(rgb_metrics),
         'depth_train': compute_stats(depth_metrics),
-        'seg_test': compute_single_stats(seg_test_metrics),
-        'seg_train': compute_single_stats(seg_train_metrics)
+        'seg_test': compute_iter_stats(seg_test_metrics),
+        'seg_train': compute_iter_stats(seg_train_metrics)
     }
 
 
@@ -301,23 +326,23 @@ def compute_overall_statistics(all_scene_stats):
         all_scene_stats: dict {scene_name: {
             'rgb_test': {...},
             'depth_train': {...},
-            'seg_test': {...},
-            'seg_train': {...}
+            'seg_test': {iteration: {metric: stats}},
+            'seg_train': {iteration: {metric: stats}}
         }}
     
     Returns:
         dict: {
             'rgb_test': {method: {metric: stats}},
             'depth_train': {method: {metric: stats}},
-            'seg_test': {metric: stats},
-            'seg_train': {metric: stats}
+            'seg_test': {iteration: {metric: stats}},
+            'seg_train': {iteration: {metric: stats}}
         }
     """
     # Organize by split type
     rgb_overall = defaultdict(lambda: defaultdict(list))
     depth_overall = defaultdict(lambda: defaultdict(list))
-    seg_test_overall = defaultdict(list)
-    seg_train_overall = defaultdict(list)
+    seg_test_overall = defaultdict(lambda: defaultdict(list))  # iteration -> metric -> values
+    seg_train_overall = defaultdict(lambda: defaultdict(list))  # iteration -> metric -> values
     
     for scene_name, scene_stats in all_scene_stats.items():
         # RGB metrics (test split)
@@ -332,15 +357,17 @@ def compute_overall_statistics(all_scene_stats):
                 for metric_name, stats in metrics.items():
                     depth_overall[method_name][metric_name].append(stats['mean'])
         
-        # Segmentation test
+        # Segmentation test (per iteration)
         if 'seg_test' in scene_stats:
-            for metric_name, stats in scene_stats['seg_test'].items():
-                seg_test_overall[metric_name].append(stats['mean'])
+            for iter_key, metrics in scene_stats['seg_test'].items():
+                for metric_name, stats in metrics.items():
+                    seg_test_overall[iter_key][metric_name].append(stats['mean'])
         
-        # Segmentation train
+        # Segmentation train (per iteration)
         if 'seg_train' in scene_stats:
-            for metric_name, stats in scene_stats['seg_train'].items():
-                seg_train_overall[metric_name].append(stats['mean'])
+            for iter_key, metrics in scene_stats['seg_train'].items():
+                for metric_name, stats in metrics.items():
+                    seg_train_overall[iter_key][metric_name].append(stats['mean'])
     
     # Compute overall statistics
     def compute_method_stats(metrics_dict):
@@ -359,25 +386,28 @@ def compute_overall_statistics(all_scene_stats):
                     }
         return stats
     
-    def compute_single_stats(metrics_dict):
+    def compute_iter_stats(seg_metrics_dict):
+        """Compute stats for per-iteration segmentation metrics."""
         stats = {}
-        for metric_name, values in metrics_dict.items():
-            values = np.array(values)
-            if len(values) > 0:
-                stats[metric_name] = {
-                    'mean': float(np.mean(values)),
-                    'std': float(np.std(values)),
-                    'min': float(np.min(values)),
-                    'max': float(np.max(values)),
-                    'count': len(values)
-                }
+        for iter_key, metrics in seg_metrics_dict.items():
+            stats[iter_key] = {}
+            for metric_name, values in metrics.items():
+                values = np.array(values)
+                if len(values) > 0:
+                    stats[iter_key][metric_name] = {
+                        'mean': float(np.mean(values)),
+                        'std': float(np.std(values)),
+                        'min': float(np.min(values)),
+                        'max': float(np.max(values)),
+                        'count': len(values)
+                    }
         return stats
     
     return {
         'rgb_test': compute_method_stats(rgb_overall),
         'depth_train': compute_method_stats(depth_overall),
-        'seg_test': compute_single_stats(seg_test_overall),
-        'seg_train': compute_single_stats(seg_train_overall)
+        'seg_test': compute_iter_stats(seg_test_overall),
+        'seg_train': compute_iter_stats(seg_train_overall)
     }
 
 
@@ -418,29 +448,43 @@ def print_results_table(overall_stats, title="Overall Results"):
                     print(f"  {metric_name:<15} {stat['mean']:>12.4f} {stat['std']:>12.4f} "
                           f"{stat['min']:>12.4f} {stat['max']:>12.4f}")
     
-    # Print Segmentation metrics (TEST split)
+    # Print Segmentation metrics (TEST split) - per iteration
     if 'seg_test' in overall_stats and overall_stats['seg_test']:
-        print(f"\n{'SEGMENTATION METRICS (TEST SPLIT)':^80}")
+        print(f"\n{'SEGMENTATION METRICS (TEST SPLIT - Novel Views)':^80}")
         print(f"{'='*80}")
-        print(f"  {'Metric':<15} {'Mean':>12} {'Std':>12} {'Min':>12} {'Max':>12}")
-        print(f"  {'-'*63}")
         
-        for metric_name in sorted(overall_stats['seg_test'].keys()):
-            stat = overall_stats['seg_test'][metric_name]
-            print(f"  {metric_name:<15} {stat['mean']:>12.4f} {stat['std']:>12.4f} "
-                  f"{stat['min']:>12.4f} {stat['max']:>12.4f}")
+        # Sort iterations
+        iterations = sorted(overall_stats['seg_test'].keys())
+        for iter_key in iterations:
+            metrics = overall_stats['seg_test'][iter_key]
+            iter_num = iter_key.replace('iter_', '')
+            print(f"\n{iter_key} (Iteration {iter_num}):")
+            print(f"  {'Metric':<15} {'Mean':>12} {'Std':>12} {'Min':>12} {'Max':>12}")
+            print(f"  {'-'*63}")
+            
+            for metric_name in sorted(metrics.keys()):
+                stat = metrics[metric_name]
+                print(f"  {metric_name:<15} {stat['mean']:>12.4f} {stat['std']:>12.4f} "
+                      f"{stat['min']:>12.4f} {stat['max']:>12.4f}")
     
-    # Print Segmentation metrics (TRAIN split)
+    # Print Segmentation metrics (TRAIN split) - per iteration
     if 'seg_train' in overall_stats and overall_stats['seg_train']:
-        print(f"\n{'SEGMENTATION METRICS (TRAIN SPLIT)':^80}")
+        print(f"\n{'SEGMENTATION METRICS (TRAIN SPLIT - Reference Views)':^80}")
         print(f"{'='*80}")
-        print(f"  {'Metric':<15} {'Mean':>12} {'Std':>12} {'Min':>12} {'Max':>12}")
-        print(f"  {'-'*63}")
         
-        for metric_name in sorted(overall_stats['seg_train'].keys()):
-            stat = overall_stats['seg_train'][metric_name]
-            print(f"  {metric_name:<15} {stat['mean']:>12.4f} {stat['std']:>12.4f} "
-                  f"{stat['min']:>12.4f} {stat['max']:>12.4f}")
+        # Sort iterations
+        iterations = sorted(overall_stats['seg_train'].keys())
+        for iter_key in iterations:
+            metrics = overall_stats['seg_train'][iter_key]
+            iter_num = iter_key.replace('iter_', '')
+            print(f"\n{iter_key} (Iteration {iter_num}):")
+            print(f"  {'Metric':<15} {'Mean':>12} {'Std':>12} {'Min':>12} {'Max':>12}")
+            print(f"  {'-'*63}")
+            
+            for metric_name in sorted(metrics.keys()):
+                stat = metrics[metric_name]
+                print(f"  {metric_name:<15} {stat['mean']:>12.4f} {stat['std']:>12.4f} "
+                      f"{stat['min']:>12.4f} {stat['max']:>12.4f}")
 
 
 def save_summary_json(output_path, scene_stats, overall_stats, metadata):
@@ -598,8 +642,6 @@ This separation is important for fair comparison with other methods.
                        help='Directory containing scene_case subdirectories with results')
     parser.add_argument('--output_dir', '-o', type=str, default=None,
                        help='Output directory for summary files (default: results_dir)')
-    parser.add_argument('--iteration', '-i', type=str, default='7000',
-                       help='Iteration number for segmentation metrics (default: 7000)')
     parser.add_argument('--formats', nargs='+', default=['json', 'csv', 'latex'],
                        choices=['json', 'csv', 'latex'],
                        help='Output formats (default: all)')
@@ -619,11 +661,11 @@ This separation is important for fair comparison with other methods.
     print(f"{'='*80}")
     print(f"Results directory: {results_dir}")
     print(f"Output directory:  {output_dir}")
-    print(f"Iteration:         {args.iteration}")
+    print(f"Iterations:        2000, 3000, 4000, 5000, 6000, 7000 (all)")
     print(f"{'='*80}\n")
     
     # Collect all results
-    all_results = collect_all_results(results_dir, args.iteration)
+    all_results = collect_all_results(results_dir)
     
     if not all_results:
         print("❌ No results found!")
