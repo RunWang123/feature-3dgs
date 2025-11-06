@@ -34,19 +34,45 @@ def readImages(renders_dir, gt_dir):
         image_names.append(fname)
     return renders, gts, image_names
 
-def load_scannet_depth(depth_path):
+def load_scannet_depth(depth_path, target_size=448):
     """
-    Load ScanNet depth image.
+    Load ScanNet depth image with the SAME crop+resize as RGB images.
+    
+    IMPORTANT: This applies the exact same preprocessing as create_feature3dgs_structure_with_gt_poses.py:
+    1. Central crop from 512×386 to 386×386 (square)
+    2. Resize to 448×448
+    
     ScanNet depth is stored as uint16 PNG in millimeters.
     
     Args:
         depth_path: Path to depth PNG file
+        target_size: Target size after crop+resize (default 448)
         
     Returns:
-        depth: Depth tensor in meters (float32)
+        depth: Depth tensor in meters (float32), shape (448, 448)
     """
     depth_img = Image.open(depth_path)
-    depth_array = np.array(depth_img, dtype=np.float32)
+    
+    # Get original dimensions (ScanNet: 512×386)
+    orig_width, orig_height = depth_img.size
+    
+    # Apply same crop as RGB: central crop to square
+    crop_size = min(orig_width, orig_height)
+    crop_left = (orig_width - crop_size) // 2
+    crop_top = (orig_height - crop_size) // 2
+    
+    # Crop to square (386×386 for ScanNet)
+    depth_img_cropped = depth_img.crop((crop_left, crop_top, 
+                                        crop_left + crop_size, 
+                                        crop_top + crop_size))
+    
+    # Resize to target size (448×448)
+    # Use NEAREST to preserve depth values (same as F.interpolate mode='nearest')
+    depth_img_resized = depth_img_cropped.resize((target_size, target_size), 
+                                                   Image.Resampling.NEAREST)
+    
+    # Convert to numpy array
+    depth_array = np.array(depth_img_resized, dtype=np.float32)
     
     # Convert from millimeters to meters
     depth_array = depth_array / 1000.0
@@ -78,8 +104,10 @@ def readDepthMaps(pred_depth_dir, gt_depth_dir=None, json_split_path=None, case_
     depth_names = []
     
     # Get list of depth files (predicted)
+    # NOTE: Each depth is saved in both .npy and .pt formats during rendering
+    # We only load .npy files to avoid duplicates
     depth_files = sorted([f for f in os.listdir(pred_depth_dir) 
-                         if f.endswith('.npy') or f.endswith('.pt')])
+                         if f.endswith('.npy')])
     
     # If we have a JSON split, load it to map indices to frame IDs
     frame_id_mapping = None
@@ -155,6 +183,7 @@ def readDepthMaps(pred_depth_dir, gt_depth_dir=None, json_split_path=None, case_
             if os.path.exists(gt_path):
                 # Check if it's a PNG (ScanNet format) or numpy/torch
                 if gt_fname.endswith('.png'):
+                    # Load with same crop+resize as RGB (already at 448×448)
                     gt_depth = load_scannet_depth(gt_path).cuda()
                 elif gt_fname.endswith('.npy'):
                     gt_depth = torch.from_numpy(np.load(gt_path)).float().cuda()
@@ -165,8 +194,10 @@ def readDepthMaps(pred_depth_dir, gt_depth_dir=None, json_split_path=None, case_
                 if gt_depth.dim() == 3:
                     gt_depth = gt_depth.squeeze(0)
                 
-                # Resize GT depth to match predicted depth if needed
+                # Verify dimensions match (should be 448×448 after preprocessing)
                 if gt_depth.shape != pred_depth.shape:
+                    print(f"  Warning: GT depth shape {gt_depth.shape} != pred shape {pred_depth.shape}")
+                    print(f"           Resizing GT depth (this shouldn't happen if preprocessing is correct)")
                     import torch.nn.functional as F
                     gt_depth_4d = gt_depth.unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
                     gt_depth_resized = F.interpolate(
