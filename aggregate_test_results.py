@@ -41,6 +41,7 @@ def load_results_json(json_path):
 def load_segmentation_metrics(scene_case_dir, iteration='7000'):
     """
     Load segmentation metrics for train and test splits.
+    Filters out metadata fields to keep only actual metrics.
     
     Returns:
         dict: {'train': {...}, 'test': {...}} or None
@@ -58,10 +59,41 @@ def load_segmentation_metrics(scene_case_dir, iteration='7000'):
     scene_name = parts[0]
     case_id = parts[1]
     
-    # Construct expected filenames
+    # Construct expected filenames (use gt_metrics, not teacher_student_metrics)
     base_name = f"{scene_name}_case{case_id}_iter{iteration}_gt_metrics"
     train_file = results_dir / f"{base_name}_train.json"
     test_file = results_dir / f"{base_name}_test.json"
+    
+    # Metadata fields to exclude (not actual metrics)
+    metadata_fields = {
+        'iteration', 'num_classes', 'num_samples', 'labels', 
+        'split', 'scene_name', 'case_id', 'timestamp'
+    }
+    
+    def filter_metrics(data):
+        """Extract only actual metric values, exclude metadata."""
+        if not isinstance(data, dict):
+            return {}
+        
+        filtered = {}
+        
+        # Check if metrics are nested under a "metrics" key (segmentation JSON format)
+        if 'metrics' in data and isinstance(data['metrics'], dict):
+            # Extract from nested metrics dict
+            for metric_key, metric_val in data['metrics'].items():
+                if isinstance(metric_val, (int, float)):
+                    filtered[metric_key] = metric_val
+        else:
+            # Extract from flat structure (results.json format)
+            for key, value in data.items():
+                # Skip metadata fields
+                if key in metadata_fields:
+                    continue
+                # Keep numeric metric values
+                if isinstance(value, (int, float)):
+                    filtered[key] = value
+        
+        return filtered
     
     seg_metrics = {}
     
@@ -69,7 +101,10 @@ def load_segmentation_metrics(scene_case_dir, iteration='7000'):
     if train_file.exists():
         try:
             with open(train_file, 'r') as f:
-                seg_metrics['train'] = json.load(f)
+                data = json.load(f)
+                filtered = filter_metrics(data)
+                if filtered:
+                    seg_metrics['train'] = filtered
         except Exception as e:
             print(f"Warning: Could not load {train_file}: {e}")
     
@@ -77,7 +112,10 @@ def load_segmentation_metrics(scene_case_dir, iteration='7000'):
     if test_file.exists():
         try:
             with open(test_file, 'r') as f:
-                seg_metrics['test'] = json.load(f)
+                data = json.load(f)
+                filtered = filter_metrics(data)
+                if filtered:
+                    seg_metrics['test'] = filtered
         except Exception as e:
             print(f"Warning: Could not load {test_file}: {e}")
     
