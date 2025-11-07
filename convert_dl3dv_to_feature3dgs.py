@@ -246,68 +246,44 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
         return False
     
     images_dir = os.path.join(gaussian_splat_dir, 'images_4')
-    sparse_dir = os.path.join(gaussian_splat_dir, 'sparse')
-    
-    # Check for sparse/0 subdirectory (COLMAP convention)
-    if os.path.exists(os.path.join(sparse_dir, '0')):
-        sparse_dir = os.path.join(sparse_dir, '0')
+    transforms_json = os.path.join(gaussian_splat_dir, 'transforms.json')
     
     if not os.path.exists(images_dir):
         print(f"❌ Error: images_4 directory not found")
         return False
     
-    if not os.path.exists(sparse_dir):
-        print(f"❌ Error: sparse directory not found")
+    if not os.path.exists(transforms_json):
+        print(f"❌ Error: transforms.json not found")
         return False
     
-    # Read COLMAP data
-    cameras_bin = os.path.join(sparse_dir, 'cameras.bin')
-    images_bin = os.path.join(sparse_dir, 'images.bin')
-    points3d_bin = os.path.join(sparse_dir, 'points3D.bin')
+    # Read transforms.json (NeRF/Nerfstudio format)
+    print("Reading transforms.json...")
+    with open(transforms_json, 'r') as f:
+        transforms = json.load(f)
     
-    if not all(os.path.exists(f) for f in [cameras_bin, images_bin]):
-        print(f"❌ Error: COLMAP binary files not found")
+    # Extract camera intrinsics from JSON
+    orig_width = transforms['w']
+    orig_height = transforms['h']
+    fx = transforms['fl_x']
+    fy = transforms['fl_y']
+    cx = transforms['cx']
+    cy = transforms['cy']
+    frames = transforms['frames']
+    
+    if len(frames) == 0:
+        print(f"❌ Error: No frames in transforms.json")
         return False
     
-    print("Reading COLMAP data...")
-    cameras = read_cameras_binary(cameras_bin)
-    images = read_images_binary(images_bin)
-    
-    if len(cameras) == 0 or len(images) == 0:
-        print(f"❌ Error: No cameras or images in COLMAP reconstruction")
-        return False
-    
-    print(f"  Cameras: {len(cameras)}")
-    print(f"  Images: {len(images)}")
+    print(f"  Frames: {len(frames)}")
+    print(f"  Original size: {orig_width}x{orig_height}")
+    print(f"  Camera model: {transforms.get('camera_model', 'PINHOLE')}")
+    print(f"  Original intrinsics: fx={fx:.2f}, fy={fy:.2f}, cx={cx:.2f}, cy={cy:.2f}")
     
     # Create output directories
     output_images_dir = os.path.join(output_path, 'images')
     output_sparse_dir = os.path.join(output_path, 'sparse', '0')
     os.makedirs(output_images_dir, exist_ok=True)
     os.makedirs(output_sparse_dir, exist_ok=True)
-    
-    # Get first camera to determine original size
-    first_camera_id = list(cameras.keys())[0]
-    model, orig_width, orig_height, params = cameras[first_camera_id]
-    
-    print(f"\nOriginal image size: {orig_width}x{orig_height}")
-    
-    # Extract intrinsics based on camera model
-    if model == 0:  # SIMPLE_PINHOLE
-        fx = fy = params[0]
-        cx, cy = params[1], params[2]
-    elif model == 1:  # PINHOLE
-        fx, fy = params[0], params[1]
-        cx, cy = params[2], params[3]
-    elif model == 2:  # SIMPLE_RADIAL
-        fx = fy = params[0]
-        cx, cy = params[1], params[2]
-        print(f"⚠️  Warning: SIMPLE_RADIAL model detected, converting to PINHOLE")
-    else:
-        print(f"❌ Error: Unsupported camera model {model}")
-        return False
-    
-    print(f"Original intrinsics: fx={fx:.2f}, fy={fy:.2f}, cx={cx:.2f}, cy={cy:.2f}")
     
     # Compute transformation
     crop_params, scale = compute_camera_transform(orig_width, orig_height, target_size)
@@ -325,41 +301,49 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
     
     print(f"\nAdjusted intrinsics: fx={fx_new:.2f}, fy={fy_new:.2f}, cx={cx_new:.2f}, cy={cy_new:.2f}")
     
-    # Preprocess images
-    print(f"\nPreprocessing {len(images)} images...")
-    available_images = {}
-    for image_id, (qvec, tvec, camera_id, image_name) in tqdm(images.items()):
+    # Preprocess images and extract poses
+    print(f"\nPreprocessing {len(frames)} images...")
+    available_frames = []
+    for frame_idx, frame in enumerate(tqdm(frames)):
+        # Fix file path: JSON says "images/" but actual folder is "images_4/"
+        file_path = frame['file_path']
+        image_name = os.path.basename(file_path)
         input_path = os.path.join(images_dir, image_name)
         
         if not os.path.exists(input_path):
             print(f"⚠️  Warning: Image not found: {image_name}")
             continue
         
-        # Keep original extension or convert to PNG
+        # Output as PNG
         output_name = os.path.splitext(image_name)[0] + '.png'
         output_path = os.path.join(output_images_dir, output_name)
         
         try:
             preprocess_image(input_path, output_path, target_size)
-            available_images[image_id] = (qvec, tvec, camera_id, output_name)
+            
+            # Extract transform matrix (C2W format in NeRF convention)
+            transform_matrix = np.array(frame['transform_matrix'])
+            
+            available_frames.append({
+                'output_name': output_name,
+                'transform_matrix': transform_matrix
+            })
         except Exception as e:
             print(f"⚠️  Error processing {image_name}: {e}")
     
-    if len(available_images) == 0:
+    if len(available_frames) == 0:
         print(f"❌ Error: No images could be processed")
         return False
     
-    print(f"\n✓ Processed {len(available_images)} images")
+    print(f"\n✓ Processed {len(available_frames)} images")
     
     # Compute scene normalization
     print("\nComputing scene normalization...")
     camera_centers = []
-    for image_id in available_images:
-        qvec, tvec, _, _ = available_images[image_id]
-        R = qvec2rotmat(qvec)
-        t = tvec
-        # Camera center in world coordinates: -R^T * t
-        center = -R.T @ t
+    for frame in available_frames:
+        c2w = frame['transform_matrix']
+        # Camera center is the translation part of C2W
+        center = c2w[:3, 3]
         camera_centers.append(center)
     
     camera_centers = np.array(camera_centers)
@@ -371,35 +355,31 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
     print(f"  Scene radius: {scene_radius:.3f}")
     print(f"  Scale factor: {scale_factor:.6f}")
     
-    # Normalize poses and write COLMAP files
-    print("\nNormalizing camera poses...")
+    # Normalize poses and convert to COLMAP W2C format
+    print("\nNormalizing and converting camera poses...")
     image_data = []
-    for idx, image_id in enumerate(sorted(available_images.keys())):
-        qvec, tvec, camera_id, image_name = available_images[image_id]
+    for idx, frame in enumerate(available_frames):
+        c2w = frame['transform_matrix']
+        output_name = frame['output_name']
         
-        # Convert to world-to-camera with normalization
-        R_w2c = qvec2rotmat(qvec)
-        t_w2c = tvec
+        # Normalize C2W pose
+        c2w_normalized = c2w.copy()
+        c2w_normalized[:3, 3] = (c2w[:3, 3] - scene_center) * scale_factor
         
-        # Convert to camera-to-world for normalization
-        R_c2w = R_w2c.T
-        t_c2w = -R_w2c.T @ t_w2c
+        # Convert to W2C (COLMAP format)
+        w2c = np.linalg.inv(c2w_normalized)
+        R_w2c = w2c[:3, :3]
+        t_w2c = w2c[:3, 3]
         
-        # Normalize
-        t_c2w_normalized = (t_c2w - scene_center) * scale_factor
-        
-        # Convert back to world-to-camera
-        t_w2c_normalized = -R_c2w.T @ t_c2w_normalized
-        
-        # Convert rotation back to quaternion
-        qvec_new = rotmat2qvec(R_w2c)
+        # Convert rotation to quaternion
+        qvec = rotmat2qvec(R_w2c)
         
         image_data.append({
             'image_id': idx + 1,
-            'qvec': qvec_new,
-            'tvec': t_w2c_normalized,
+            'qvec': qvec,
+            'tvec': t_w2c,
             'camera_id': 1,
-            'image_name': image_name
+            'image_name': output_name
         })
     
     # Write COLMAP files
