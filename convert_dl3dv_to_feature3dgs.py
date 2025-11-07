@@ -239,6 +239,42 @@ def write_points3d_txt(output_dir, points3d_data=None):
                 f.write(f"{pt['point_id']} {xyz[0]:.10f} {xyz[1]:.10f} {xyz[2]:.10f} "
                        f"{int(rgb[0])} {int(rgb[1])} {int(rgb[2])} 0.0\n")
 
+def write_points3d_ply(output_dir, points3d_data=None):
+    """
+    Write points3D.ply file (required by feature-3dgs)
+    
+    Args:
+        output_dir: Output directory
+        points3d_data: List of dicts with keys: point_id, xyz, rgb
+    """
+    from plyfile import PlyData, PlyElement
+    
+    ply_path = os.path.join(output_dir, 'points3D.ply')
+    
+    if points3d_data is None or len(points3d_data) == 0:
+        # Write empty PLY
+        xyz = np.zeros((0, 3))
+        rgb = np.zeros((0, 3))
+    else:
+        xyz = np.array([pt['xyz'] for pt in points3d_data])
+        rgb = np.array([pt['rgb'] for pt in points3d_data])
+    
+    # Create PLY format
+    dtype = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
+             ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
+             ('red', 'u1'), ('green', 'u1'), ('blue', 'u1')]
+    
+    normals = np.zeros_like(xyz)
+    
+    elements = np.empty(xyz.shape[0], dtype=dtype)
+    attributes = np.concatenate((xyz, normals, rgb), axis=1)
+    elements[:] = list(map(tuple, attributes))
+    
+    # Create vertex element
+    vertex_element = PlyElement.describe(elements, 'vertex')
+    ply_data = PlyData([vertex_element])
+    ply_data.write(ply_path)
+
 def convert_dl3dv_scene(scene_path, output_path, target_size=448):
     """
     Convert a single DL3DV scene to feature-3dgs format.
@@ -429,10 +465,15 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
     write_cameras_txt(output_sparse_dir, fx_new, fy_new, cx_new, cy_new, target_size)
     write_images_txt(output_sparse_dir, image_data)
     write_points3d_txt(output_sparse_dir, points3d_data)
+    write_points3d_ply(output_sparse_dir, points3d_data)  # feature-3dgs expects PLY format
     
     print(f"\n✅ Scene processed successfully!")
     print(f"   Output: {output_path}")
     print(f"   Images: {len(image_data)}")
+    if points3d_data:
+        print(f"   3D Points: {len(points3d_data)}")
+    else:
+        print(f"   3D Points: 0 (will use random initialization)")
     
     return True
 
