@@ -217,12 +217,27 @@ def write_images_txt(output_dir, image_data):
                    f"{tvec[0]:.10f} {tvec[1]:.10f} {tvec[2]:.10f} {img['camera_id']} {img['image_name']}\n")
             f.write("\n")
 
-def write_points3d_txt(output_dir):
-    """Write empty COLMAP points3D.txt for random initialization"""
+def write_points3d_txt(output_dir, points3d_data=None):
+    """
+    Write COLMAP points3D.txt
+    
+    Args:
+        output_dir: Output directory
+        points3d_data: List of dicts with keys: point_id, xyz, rgb
+    """
     with open(os.path.join(output_dir, 'points3D.txt'), 'w') as f:
         f.write("# 3D point list with one line of data per point:\n")
         f.write("#   POINT3D_ID, X, Y, Z, R, G, B, ERROR, TRACK[] as (IMAGE_ID, POINT2D_IDX)\n")
-        f.write("# Number of points: 0, mean track length: 0\n")
+        
+        if points3d_data is None or len(points3d_data) == 0:
+            f.write("# Number of points: 0, mean track length: 0\n")
+        else:
+            f.write(f"# Number of points: {len(points3d_data)}, mean track length: 0\n")
+            for pt in points3d_data:
+                xyz = pt['xyz']
+                rgb = pt['rgb']
+                f.write(f"{pt['point_id']} {xyz[0]:.10f} {xyz[1]:.10f} {xyz[2]:.10f} "
+                       f"{int(rgb[0])} {int(rgb[1])} {int(rgb[2])} 0.0\n")
 
 def convert_dl3dv_scene(scene_path, output_path, target_size=448):
     """
@@ -247,6 +262,7 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
     
     images_dir = os.path.join(gaussian_splat_dir, 'images_4')
     transforms_json = os.path.join(gaussian_splat_dir, 'transforms.json')
+    sparse_dir = os.path.join(gaussian_splat_dir, 'sparse', '0')
     
     if not os.path.exists(images_dir):
         print(f"❌ Error: images_4 directory not found")
@@ -382,10 +398,37 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
             'image_name': output_name
         })
     
+    # Read and normalize 3D points if available
+    print("\nProcessing 3D points...")
+    points3d_data = None
+    points3d_bin = os.path.join(sparse_dir, 'points3D.bin')
+    
+    if os.path.exists(points3d_bin):
+        try:
+            points3d = read_points3D_binary(points3d_bin)
+            print(f"  Found {len(points3d)} 3D points")
+            
+            # Normalize 3D points with same transformation as camera poses
+            points3d_data = []
+            for point_id, (xyz, rgb, error, track) in points3d.items():
+                xyz_normalized = (xyz - scene_center) * scale_factor
+                points3d_data.append({
+                    'point_id': point_id,
+                    'xyz': xyz_normalized,
+                    'rgb': rgb
+                })
+            
+            print(f"  Normalized {len(points3d_data)} 3D points")
+        except Exception as e:
+            print(f"⚠️  Warning: Could not read 3D points: {e}")
+            print("  Will use random initialization instead")
+    else:
+        print("  No 3D points found, will use random initialization")
+    
     # Write COLMAP files
     write_cameras_txt(output_sparse_dir, fx_new, fy_new, cx_new, cy_new, target_size)
     write_images_txt(output_sparse_dir, image_data)
-    write_points3d_txt(output_sparse_dir)
+    write_points3d_txt(output_sparse_dir, points3d_data)
     
     print(f"\n✅ Scene processed successfully!")
     print(f"   Output: {output_path}")
