@@ -32,8 +32,8 @@ FEATURE_3DGS_DIR="/home/runw/project/feature-3dgs"
 
 # Training parameters
 ITERATIONS=7000
-SAVE_ITERATIONS="2000 3000 4000 5000 6000 7000"
-TEST_ITERATIONS="2000 3000 4000 5000 6000 7000"
+SAVE_ITERATIONS="3000 7000"
+TEST_ITERATIONS="3000 7000"
 SEMANTIC_LABELS="wall,floor,ceiling,chair,table,sofa,bed,other"
 
 # ============================================================================
