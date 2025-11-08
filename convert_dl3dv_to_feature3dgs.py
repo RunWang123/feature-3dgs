@@ -389,37 +389,15 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
     
     print(f"\n✓ Processed {len(available_frames)} images")
     
-    # Compute scene normalization
-    print("\nComputing scene normalization...")
-    camera_centers = []
-    for frame in available_frames:
-        c2w = frame['transform_matrix']
-        # Camera center is the translation part of C2W
-        center = c2w[:3, 3]
-        camera_centers.append(center)
-    
-    camera_centers = np.array(camera_centers)
-    scene_center = np.mean(camera_centers, axis=0)
-    scene_radius = np.max(np.linalg.norm(camera_centers - scene_center, axis=1))
-    scale_factor = 1.0 / (scene_radius * 1.1)  # Scale to fit in [-1, 1] range
-    
-    print(f"  Scene center: [{scene_center[0]:.3f}, {scene_center[1]:.3f}, {scene_center[2]:.3f}]")
-    print(f"  Scene radius: {scene_radius:.3f}")
-    print(f"  Scale factor: {scale_factor:.6f}")
-    
-    # Normalize poses and convert to COLMAP W2C format
-    print("\nNormalizing and converting camera poses...")
+    # Convert poses from C2W to W2C format (no normalization - keep original scale)
+    print("\nConverting camera poses to COLMAP format...")
     image_data = []
     for idx, frame in enumerate(available_frames):
         c2w = frame['transform_matrix']
         output_name = frame['output_name']
         
-        # Normalize C2W pose
-        c2w_normalized = c2w.copy()
-        c2w_normalized[:3, 3] = (c2w[:3, 3] - scene_center) * scale_factor
-        
-        # Convert to W2C (COLMAP format)
-        w2c = np.linalg.inv(c2w_normalized)
+        # Convert C2W to W2C (COLMAP format) - keep original scale
+        w2c = np.linalg.inv(c2w)
         R_w2c = w2c[:3, :3]
         t_w2c = w2c[:3, 3]
         
@@ -434,7 +412,7 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
             'image_name': output_name
         })
     
-    # Read and normalize 3D points if available
+    # Read 3D points (keep original scale - no normalization)
     print("\nProcessing 3D points...")
     points3d_data = None
     points3d_bin = os.path.join(sparse_dir, 'points3D.bin')
@@ -444,17 +422,16 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
             points3d = read_points3D_binary(points3d_bin)
             print(f"  Found {len(points3d)} 3D points")
             
-            # Normalize 3D points with same transformation as camera poses
+            # Keep 3D points at original scale (no normalization)
             points3d_data = []
             for point_id, (xyz, rgb, error, track) in points3d.items():
-                xyz_normalized = (xyz - scene_center) * scale_factor
                 points3d_data.append({
                     'point_id': point_id,
-                    'xyz': xyz_normalized,
+                    'xyz': xyz,  # Keep original coordinates
                     'rgb': rgb
                 })
             
-            print(f"  Normalized {len(points3d_data)} 3D points")
+            print(f"  Loaded {len(points3d_data)} 3D points (original scale)")
         except Exception as e:
             print(f"⚠️  Warning: Could not read 3D points: {e}")
             print("  Will use random initialization instead")

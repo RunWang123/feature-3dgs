@@ -291,31 +291,12 @@ def convert_mipnerf360_scene(scene_path, output_path, target_size=448, use_downs
     os.makedirs(output_images_dir, exist_ok=True)
     os.makedirs(output_sparse_dir, exist_ok=True)
     
-    # Process images and compute normalization
+    # Process images (no normalization - keep original scale)
     print(f"\n🖼️  Processing images to {target_size}x{target_size}...")
     
-    # First pass: collect camera centers for normalization
-    camera_centers = []
     image_list = sorted(images.items(), key=lambda x: x[1][3])  # Sort by name
     
-    for img_id, (qvec, tvec, cam_id, name) in image_list:
-        # Convert W2C to C2W to get camera center
-        R_w2c = qvec2rotmat(qvec)
-        t_w2c = tvec
-        R_c2w = R_w2c.T
-        t_c2w = -R_c2w @ t_w2c
-        camera_centers.append(t_c2w)
-    
-    camera_centers = np.array(camera_centers)
-    scene_center = np.mean(camera_centers, axis=0)
-    scene_radius = np.max(np.linalg.norm(camera_centers - scene_center, axis=1))
-    scale_factor = 1.0 / (scene_radius * 1.1)  # Scale to fit in [-1, 1] with margin
-    
-    print(f"  Scene center: {scene_center}")
-    print(f"  Scene radius: {scene_radius:.4f}")
-    print(f"  Scale factor: {scale_factor:.4f}")
-    
-    # Second pass: process images and adjust cameras
+    # Process images and adjust cameras
     new_cameras = {}
     new_images = {}
     
@@ -352,33 +333,14 @@ def convert_mipnerf360_scene(scene_path, output_path, target_size=448, use_downs
         if cam_id not in new_cameras:
             new_cameras[cam_id] = ("PINHOLE", target_size, target_size, [fx_new, fy_new, cx_new, cy_new])
         
-        # Normalize pose: Convert W2C -> C2W -> normalize -> W2C
-        R_w2c = qvec2rotmat(qvec)
-        t_w2c = tvec
-        
-        # W2C to C2W
-        R_c2w = R_w2c.T
-        t_c2w = -R_c2w @ t_w2c
-        
-        # Normalize translation
-        t_c2w_normalized = (t_c2w - scene_center) * scale_factor
-        
-        # C2W back to W2C
-        R_w2c_normalized = R_c2w.T
-        t_w2c_normalized = -R_w2c_normalized @ t_c2w_normalized
-        
-        # Convert to quaternion
-        qvec_normalized = rotmat2qvec(R_w2c_normalized)
-        
-        # Store normalized image pose
-        new_images[img_id] = (qvec_normalized, t_w2c_normalized, cam_id, name)
+        # Keep original pose (no normalization)
+        new_images[img_id] = (qvec, tvec, cam_id, name)
     
-    # Normalize 3D points
-    print(f"\n📍 Normalizing {len(points3D)} 3D points...")
+    # Keep 3D points at original scale (no normalization)
+    print(f"\n📍 Processing {len(points3D)} 3D points...")
     new_points3D = {}
     for pt_id, (xyz, rgb, error, track) in points3D.items():
-        xyz_normalized = (xyz - scene_center) * scale_factor
-        new_points3D[pt_id] = (xyz_normalized, rgb)
+        new_points3D[pt_id] = (xyz, rgb)  # Keep original coordinates
     
     # Write COLMAP text files
     print(f"\n💾 Writing COLMAP files...")
@@ -386,24 +348,10 @@ def convert_mipnerf360_scene(scene_path, output_path, target_size=448, use_downs
     write_images_text(new_images, os.path.join(output_sparse_dir, "images.txt"))
     write_points3D_text(new_points3D, os.path.join(output_sparse_dir, "points3D.txt"))
     
-    # Save metadata
-    metadata = {
-        "original_scene_center": scene_center.tolist(),
-        "original_scene_radius": float(scene_radius),
-        "scale_factor": float(scale_factor),
-        "target_size": target_size,
-        "num_images": len(new_images),
-        "num_cameras": len(new_cameras),
-        "num_points3D": len(new_points3D)
-    }
-    
-    with open(os.path.join(output_path, "metadata.json"), 'w') as f:
-        json.dump(metadata, f, indent=2)
-    
     print(f"\n✅ Conversion complete!")
     print(f"  Output: {output_path}")
     print(f"  Images: {len(new_images)}")
-    print(f"  3D Points: {len(new_points3D)}")
+    print(f"  3D Points: {len(new_points3D)} (original scale)")
 
 
 def main():
