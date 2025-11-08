@@ -321,6 +321,16 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
         print(f"❌ Error: No cameras in cameras.bin")
         return False
     
+    # Read transforms.json first (need it to find first image)
+    print("Reading transforms.json for poses...")
+    with open(transforms_json, 'r') as f:
+        transforms = json.load(f)
+    
+    frames = transforms['frames']
+    if len(frames) == 0:
+        print(f"❌ Error: No frames in transforms.json")
+        return False
+    
     # Get camera intrinsics from COLMAP (this is what was used for 3D reconstruction)
     cam_id = list(cameras.keys())[0]
     model, colmap_width, colmap_height, params = cameras[cam_id]
@@ -365,17 +375,6 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
     cy = cy_colmap / downscale_factor
     orig_width = actual_width
     orig_height = actual_height
-    
-    # Read transforms.json for camera poses
-    print("Reading transforms.json for poses...")
-    with open(transforms_json, 'r') as f:
-        transforms = json.load(f)
-    
-    frames = transforms['frames']
-    
-    if len(frames) == 0:
-        print(f"❌ Error: No frames in transforms.json")
-        return False
     
     print(f"  Frames: {len(frames)}")
     print(f"  Scaled intrinsics (for {orig_width}x{orig_height}): fx={fx:.2f}, fy={fy:.2f}, cx={cx:.2f}, cy={cy:.2f}")
