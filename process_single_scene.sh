@@ -169,6 +169,7 @@ echo ""
 
 SUCCESSFUL_CASES=0
 FAILED_CASES=0
+SKIPPED_CASES=0
 
 for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
     echo "========================================"
@@ -177,6 +178,17 @@ for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
     
     CASE_OUTPUT_DIR="${OUTPUT_BASE_DIR}/${SCENE_NAME}_case${CASE_ID}"
     mkdir -p "${CASE_OUTPUT_DIR}"
+    
+    # Check if this case is already completed
+    FINAL_PLY="${CASE_OUTPUT_DIR}/point_cloud/iteration_30000/point_cloud.ply"
+    if [ -f "${FINAL_PLY}" ]; then
+        echo "✅ Case already completed (found final checkpoint)"
+        echo "   Skipping case ${CASE_ID}"
+        echo ""
+        SKIPPED_CASES=$((SKIPPED_CASES + 1))
+        SUCCESSFUL_CASES=$((SUCCESSFUL_CASES + 1))  # Count as successful
+        continue
+    fi
     
     # Log file for this case
     CASE_LOG="${CASE_OUTPUT_DIR}/processing.log"
@@ -511,6 +523,9 @@ echo "Scene ${SCENE_NAME} Processing Complete"
 echo "========================================"
 echo "Total cases: ${NUM_CASES}"
 echo "Successful: ${SUCCESSFUL_CASES}"
+if [ ${SKIPPED_CASES} -gt 0 ]; then
+    echo "Skipped (already completed): ${SKIPPED_CASES}"
+fi
 echo "Failed: ${FAILED_CASES}"
 echo ""
 echo "Output directory: ${OUTPUT_BASE_DIR}"

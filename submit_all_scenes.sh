@@ -10,17 +10,23 @@ set -e
 # Configuration
 # ============================================================================
 
-if [ "$#" -ne 3 ]; then
-    echo "Usage: $0 <json_split_path> <data_base_dir> <output_base_dir>"
+if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
+    echo "Usage: $0 <json_split_path> <data_base_dir> <output_base_dir> [--skip-existing]"
     echo ""
     echo "Example:"
     echo "  $0 /scratch/split.json /scratch/data /scratch/output"
+    echo "  $0 /scratch/split.json /scratch/data /scratch/output --skip-existing"
     exit 1
 fi
 
 JSON_SPLIT_PATH="$1"
 DATA_BASE_DIR="$2"
 OUTPUT_BASE_DIR="$3"
+SKIP_EXISTING="false"
+
+if [ "$#" -eq 4 ] && [ "$4" == "--skip-existing" ]; then
+    SKIP_EXISTING="true"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROCESS_SCRIPT="${SCRIPT_DIR}/process_single_scene.sh"
@@ -56,6 +62,7 @@ echo "========================================"
 echo "JSON split: ${JSON_SPLIT_PATH}"
 echo "Data base: ${DATA_BASE_DIR}"
 echo "Output base: ${OUTPUT_BASE_DIR}"
+echo "Skip existing: ${SKIP_EXISTING}"
 echo ""
 
 # Get all scene names from JSON
@@ -95,10 +102,28 @@ echo "========================================"
 echo ""
 
 SUBMITTED_JOBS=0
+SKIPPED_JOBS=0
 JOB_IDS=()
 
 for SCENE_NAME in ${SCENE_NAMES}; do
-    echo "Submitting job for: ${SCENE_NAME}"
+    echo "Processing: ${SCENE_NAME}"
+    
+    # Check if we should skip this scene
+    if [ "${SKIP_EXISTING}" == "true" ]; then
+        # Check if output already exists
+        SCENE_OUTPUT="${OUTPUT_BASE_DIR}/${SCENE_NAME}_case0"
+        if [ -d "${SCENE_OUTPUT}" ]; then
+            # Check if training completed (look for final checkpoint)
+            if [ -f "${SCENE_OUTPUT}/point_cloud/iteration_30000/point_cloud.ply" ]; then
+                echo "  ⏭️  Skipping (already completed)"
+                SKIPPED_JOBS=$((SKIPPED_JOBS + 1))
+                echo ""
+                continue
+            fi
+        fi
+    fi
+    
+    echo "  Submitting job..."
     
     # Job name
     JOB_NAME="feature3dgs_${SCENE_NAME}"
@@ -153,6 +178,9 @@ echo "Submission Complete"
 echo "========================================"
 echo "Total scenes: ${NUM_SCENES}"
 echo "Jobs submitted: ${SUBMITTED_JOBS}"
+if [ "${SKIP_EXISTING}" == "true" ]; then
+    echo "Jobs skipped: ${SKIPPED_JOBS}"
+fi
 echo ""
 echo "Job IDs:"
 for JOB_ID in "${JOB_IDS[@]}"; do
