@@ -490,17 +490,20 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
         print(f"  Undistorted size: {undistorted_width}x{undistorted_height}")
         print(f"  Undistorted intrinsics: fx={fx:.2f}, fy={fy:.2f}, cx={cx:.2f}, cy={cy:.2f}")
     else:
-        print(f"  ✓ images_4/ are already UNDISTORTED")
+        print(f"  ✓ Skipping undistortion - using images_4/ as-is")
         undistort_params = None
         
-        # Scale COLMAP intrinsics to match actual image size
-        downscale_factor = colmap_width / distorted_width
-        fx = fx_colmap / downscale_factor
-        fy = fy_colmap / downscale_factor
-        cx = cx_colmap / downscale_factor
-        cy = cy_colmap / downscale_factor
+        # Use transforms.json intrinsics scaled to images_4/ size
+        # (images are in distorted coordinate system, not COLMAP's undistorted system)
+        scale_factor = distorted_width / transforms_width
+        fx = transforms['fl_x'] * scale_factor
+        fy = transforms['fl_y'] * scale_factor
+        cx = transforms['cx'] * scale_factor
+        cy = transforms['cy'] * scale_factor
         orig_width = distorted_width
         orig_height = distorted_height
+        
+        print(f"  Using transforms.json intrinsics (distorted camera model)")
     
     print(f"  Frames: {len(frames)}")
     print(f"  Scaled intrinsics (for {orig_width}x{orig_height}): fx={fx:.2f}, fy={fy:.2f}, cx={cx:.2f}, cy={cy:.2f}")
