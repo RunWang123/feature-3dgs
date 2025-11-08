@@ -173,11 +173,63 @@ def adjust_intrinsics(fx, fy, cx, cy, crop_left, crop_top, crop_size, scale):
     
     return fx_final, fy_final, cx_final, cy_final
 
-def preprocess_image(input_path, output_path, target_size=448):
+def undistort_image(img_array, K, dist_coeffs, new_K, new_size):
     """
-    Central crop and resize image to target_size x target_size.
+    Undistort image using OpenCV camera model.
+    
+    Args:
+        img_array: Input image as numpy array
+        K: Camera intrinsic matrix (3x3)
+        dist_coeffs: Distortion coefficients [k1, k2, p1, p2, k3]
+        new_K: New camera matrix after undistortion
+        new_size: Output image size (width, height)
+    
+    Returns:
+        Undistorted image as numpy array
     """
+    import cv2
+    
+    # Undistort
+    img_undistorted = cv2.undistort(img_array, K, dist_coeffs, None, new_K)
+    
+    # Crop to new size if needed
+    h, w = img_undistorted.shape[:2]
+    new_w, new_h = new_size
+    if w != new_w or h != new_h:
+        # Center crop
+        start_x = (w - new_w) // 2
+        start_y = (h - new_h) // 2
+        img_undistorted = img_undistorted[start_y:start_y+new_h, start_x:start_x+new_w]
+    
+    return img_undistorted
+
+def preprocess_image(input_path, output_path, target_size=448, undistort_params=None):
+    """
+    Preprocess image: optionally undistort, then central crop and resize to target_size x target_size.
+    
+    Args:
+        input_path: Input image path
+        output_path: Output image path
+        target_size: Target square size
+        undistort_params: Dict with 'K', 'dist_coeffs', 'new_K', 'new_size' for undistortion, or None
+    """
+    import cv2
+    
+    # Read image
     img = Image.open(input_path)
+    
+    # Apply undistortion if parameters provided
+    if undistort_params is not None:
+        img_array = np.array(img)
+        img_array = undistort_image(
+            img_array,
+            undistort_params['K'],
+            undistort_params['dist_coeffs'],
+            undistort_params['new_K'],
+            undistort_params['new_size']
+        )
+        img = Image.fromarray(img_array)
+    
     orig_width, orig_height = img.size
     
     # Central crop to square
@@ -349,8 +401,8 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
         print(f"❌ Error: Unsupported camera model {model}")
         return False
     
-    # Get actual image size from images_4/ (they are downscaled!)
-    # Check first image to get actual resolution
+    # Check if images_4/ are distorted or undistorted
+    # Get actual image size from images_4/
     first_frame = frames[0]
     first_image_path = os.path.join(images_dir, os.path.basename(first_frame['file_path']))
     if not os.path.exists(first_image_path):
@@ -359,22 +411,86 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
     
     from PIL import Image as PILImage
     with PILImage.open(first_image_path) as img:
-        actual_width, actual_height = img.size
+        distorted_width, distorted_height = img.size
     
-    # Compute downscale factor
-    downscale_factor = colmap_width / actual_width
+    print(f"  COLMAP reconstructed size: {colmap_width}x{colmap_height}")
+    print(f"  images_4/ size: {distorted_width}x{distorted_height}")
     
-    print(f"  COLMAP size: {colmap_width}x{colmap_height}")
-    print(f"  Actual images_4 size: {actual_width}x{actual_height}")
-    print(f"  Downscale factor: {downscale_factor:.1f}x")
+    # Determine if we need undistortion
+    # If images_4/ size matches transforms.json (3840x2160 / 4 = 960x540), they are DISTORTED
+    # If they match COLMAP size (~3819x2147 / 4 = 954x536), they are UNDISTORTED
+    transforms_width = transforms['w']
+    transforms_height = transforms['h']
+    expected_distorted_width = transforms_width // 4
+    expected_distorted_height = transforms_height // 4
     
-    # Scale COLMAP intrinsics to match actual image size
-    fx = fx_colmap / downscale_factor
-    fy = fy_colmap / downscale_factor
-    cx = cx_colmap / downscale_factor
-    cy = cy_colmap / downscale_factor
-    orig_width = actual_width
-    orig_height = actual_height
+    need_undistortion = (abs(distorted_width - expected_distorted_width) < 5 and 
+                         abs(distorted_height - expected_distorted_height) < 5)
+    
+    if need_undistortion:
+        print(f"  ⚠️  images_4/ are DISTORTED ({distorted_width}x{distorted_height})")
+        print(f"  Will undistort using OPENCV model from transforms.json")
+        
+        # Prepare undistortion parameters scaled to images_4/ resolution
+        scale_factor = distorted_width / transforms_width
+        
+        # Distorted camera matrix for images_4/
+        K_dist = np.array([
+            [transforms['fl_x'] * scale_factor, 0, transforms['cx'] * scale_factor],
+            [0, transforms['fl_y'] * scale_factor, transforms['cy'] * scale_factor],
+            [0, 0, 1]
+        ])
+        
+        # Distortion coefficients
+        dist_coeffs = np.array([
+            transforms.get('k1', 0),
+            transforms.get('k2', 0),
+            transforms.get('p1', 0),
+            transforms.get('p2', 0),
+            transforms.get('k3', 0) if 'k3' in transforms else 0
+        ])
+        
+        # New camera matrix after undistortion (COLMAP PINHOLE intrinsics scaled to images_4/)
+        downscale_factor = colmap_width / distorted_width
+        K_undist = np.array([
+            [fx_colmap / downscale_factor, 0, cx_colmap / downscale_factor],
+            [0, fy_colmap / downscale_factor, cy_colmap / downscale_factor],
+            [0, 0, 1]
+        ])
+        
+        # Undistorted size (should match COLMAP)
+        undistorted_width = int(colmap_width / downscale_factor)
+        undistorted_height = int(colmap_height / downscale_factor)
+        
+        undistort_params = {
+            'K': K_dist,
+            'dist_coeffs': dist_coeffs,
+            'new_K': K_undist,
+            'new_size': (undistorted_width, undistorted_height)
+        }
+        
+        # After undistortion, images will be undistorted_width x undistorted_height
+        fx = fx_colmap / downscale_factor
+        fy = fy_colmap / downscale_factor
+        cx = cx_colmap / downscale_factor
+        cy = cy_colmap / downscale_factor
+        orig_width = undistorted_width
+        orig_height = undistorted_height
+        
+        print(f"  Undistorted size: {undistorted_width}x{undistorted_height}")
+        print(f"  Undistorted intrinsics: fx={fx:.2f}, fy={fy:.2f}, cx={cx:.2f}, cy={cy:.2f}")
+    else:
+        print(f"  ✓ images_4/ are already UNDISTORTED")
+        undistort_params = None
+        
+        # Scale COLMAP intrinsics to match actual image size
+        downscale_factor = colmap_width / distorted_width
+        fx = fx_colmap / downscale_factor
+        fy = fy_colmap / downscale_factor
+        cx = cx_colmap / downscale_factor
+        cy = cy_colmap / downscale_factor
+        orig_width = distorted_width
+        orig_height = distorted_height
     
     print(f"  Frames: {len(frames)}")
     print(f"  Scaled intrinsics (for {orig_width}x{orig_height}): fx={fx:.2f}, fy={fy:.2f}, cx={cx:.2f}, cy={cy:.2f}")
@@ -419,7 +535,7 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
         output_path = os.path.join(output_images_dir, output_name)
         
         try:
-            preprocess_image(input_path, output_path, target_size)
+            preprocess_image(input_path, output_path, target_size, undistort_params)
             
             # Extract transform matrix (C2W format in NeRF convention)
             transform_matrix = np.array(frame['transform_matrix'])
