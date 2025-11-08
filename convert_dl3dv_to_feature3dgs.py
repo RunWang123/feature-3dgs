@@ -3,12 +3,13 @@
 Convert DL3DV dataset to feature-3dgs format with preprocessing.
 
 This script:
-1. Reads COLMAP sparse reconstruction from gaussian_splat/sparse/
-2. Uses images from gaussian_splat/images_4/
-3. Central crops and resizes images to 448x448
-4. Adjusts camera intrinsics accordingly
-5. Normalizes camera poses to [-1, 1] range
-6. Outputs feature-3dgs compatible structure
+1. Reads camera intrinsics from COLMAP sparse/0/cameras.bin (matches 3D points!)
+2. Reads camera poses from transforms.json (C2W format)
+3. Uses images from gaussian_splat/images_4/
+4. Central crops and resizes images to 448x448
+5. Adjusts camera intrinsics accordingly
+6. Converts poses from C2W to W2C (no normalization - keeps original scale)
+7. Outputs feature-3dgs compatible structure with aligned 3D points
 """
 
 import os
@@ -308,18 +309,68 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
         print(f"❌ Error: transforms.json not found")
         return False
     
-    # Read transforms.json (NeRF/Nerfstudio format)
-    print("Reading transforms.json...")
+    # Read COLMAP cameras.bin for intrinsics (these match the 3D points!)
+    print("Reading COLMAP cameras...")
+    cameras_bin = os.path.join(sparse_dir, 'cameras.bin')
+    if not os.path.exists(cameras_bin):
+        print(f"❌ Error: cameras.bin not found")
+        return False
+    
+    cameras = read_cameras_binary(cameras_bin)
+    if len(cameras) == 0:
+        print(f"❌ Error: No cameras in cameras.bin")
+        return False
+    
+    # Get camera intrinsics from COLMAP (this is what was used for 3D reconstruction)
+    cam_id = list(cameras.keys())[0]
+    model, colmap_width, colmap_height, params = cameras[cam_id]
+    
+    if model == 0:  # SIMPLE_PINHOLE
+        fx_colmap = fy_colmap = params[0]
+        cx_colmap, cy_colmap = params[1], params[2]
+    elif model == 1:  # PINHOLE
+        fx_colmap, fy_colmap = params[0], params[1]
+        cx_colmap, cy_colmap = params[2], params[3]
+    elif model == 2:  # SIMPLE_RADIAL
+        fx_colmap = fy_colmap = params[0]
+        cx_colmap, cy_colmap = params[1], params[2]
+        print(f"⚠️  Warning: SIMPLE_RADIAL model, converting to PINHOLE (ignoring distortion)")
+    else:
+        print(f"❌ Error: Unsupported camera model {model}")
+        return False
+    
+    # Get actual image size from images_4/ (they are downscaled!)
+    # Check first image to get actual resolution
+    first_frame = frames[0]
+    first_image_path = os.path.join(images_dir, os.path.basename(first_frame['file_path']))
+    if not os.path.exists(first_image_path):
+        print(f"❌ Error: First image not found: {first_image_path}")
+        return False
+    
+    from PIL import Image as PILImage
+    with PILImage.open(first_image_path) as img:
+        actual_width, actual_height = img.size
+    
+    # Compute downscale factor
+    downscale_factor = colmap_width / actual_width
+    
+    print(f"  COLMAP size: {colmap_width}x{colmap_height}")
+    print(f"  Actual images_4 size: {actual_width}x{actual_height}")
+    print(f"  Downscale factor: {downscale_factor:.1f}x")
+    
+    # Scale COLMAP intrinsics to match actual image size
+    fx = fx_colmap / downscale_factor
+    fy = fy_colmap / downscale_factor
+    cx = cx_colmap / downscale_factor
+    cy = cy_colmap / downscale_factor
+    orig_width = actual_width
+    orig_height = actual_height
+    
+    # Read transforms.json for camera poses
+    print("Reading transforms.json for poses...")
     with open(transforms_json, 'r') as f:
         transforms = json.load(f)
     
-    # Extract camera intrinsics from JSON
-    orig_width = transforms['w']
-    orig_height = transforms['h']
-    fx = transforms['fl_x']
-    fy = transforms['fl_y']
-    cx = transforms['cx']
-    cy = transforms['cy']
     frames = transforms['frames']
     
     if len(frames) == 0:
@@ -327,9 +378,7 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
         return False
     
     print(f"  Frames: {len(frames)}")
-    print(f"  Original size: {orig_width}x{orig_height}")
-    print(f"  Camera model: {transforms.get('camera_model', 'PINHOLE')}")
-    print(f"  Original intrinsics: fx={fx:.2f}, fy={fy:.2f}, cx={cx:.2f}, cy={cy:.2f}")
+    print(f"  Scaled intrinsics (for {orig_width}x{orig_height}): fx={fx:.2f}, fy={fy:.2f}, cx={cx:.2f}, cy={cy:.2f}")
     
     # Create output directories
     output_images_dir = os.path.join(output_path, 'images')
