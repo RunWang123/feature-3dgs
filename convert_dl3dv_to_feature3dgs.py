@@ -427,6 +427,16 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
     need_undistortion = (abs(distorted_width - expected_distorted_width) < 5 and 
                          abs(distorted_height - expected_distorted_height) < 5)
     
+    # Check if COLMAP was run on undistorted images
+    # If COLMAP size != transforms.json size, COLMAP used undistorted images
+    colmap_matches_transforms = (abs(colmap_width - transforms_width) < 50 and
+                                  abs(colmap_height - transforms_height) < 50)
+    
+    if not colmap_matches_transforms:
+        print(f"  ⚠️  COLMAP size ({colmap_width}x{colmap_height}) != transforms.json size ({transforms_width}x{transforms_height})")
+        print(f"  → COLMAP used undistorted images - SKIPPING undistortion!")
+        need_undistortion = False
+    
     if need_undistortion:
         print(f"  ⚠️  images_4/ are DISTORTED ({distorted_width}x{distorted_height})")
         print(f"  Will undistort using OPENCV model from transforms.json")
