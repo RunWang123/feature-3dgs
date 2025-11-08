@@ -417,55 +417,66 @@ for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
         # ----------------------------------------------------------------
         # Step 8: Ground Truth Metrics (all saved iterations, train + test)
         # Note: segmentation_metric_gt.py internally processes both splits
+        # Only run if GT labels exist (e.g., ScanNet has them, DL3DV doesn't)
         # ----------------------------------------------------------------
         echo ""
         echo "----------------------------------------"
         echo "Step 8: Ground Truth Metrics (Case ${CASE_ID})"
         echo "----------------------------------------"
         
-        # Check if label mapping file exists
-        LABEL_MAPPING_FILE="${FEATURE_3DGS_DIR}/encoders/lseg_encoder/scannetv2-labels.combined.tsv"
-        if [ ! -f "${LABEL_MAPPING_FILE}" ]; then
-            echo "⚠️  Warning: Label mapping file not found: ${LABEL_MAPPING_FILE}"
-            echo "   GT metrics will use identity mapping (may be incorrect for ScanNet)"
-            LABEL_MAPPING_ARG=""
+        # Check if GT label directory exists
+        GT_LABEL_DIR="${SCENE_DATA_DIR}/label-filt"
+        if [ ! -d "${GT_LABEL_DIR}" ]; then
+            echo "ℹ️  Ground truth label directory not found: ${GT_LABEL_DIR}"
+            echo "   Skipping GT segmentation metrics (dataset may not provide GT labels)"
+            echo "   Teacher-Student metrics (Step 7) are the primary evaluation for this scene"
         else
-            echo "✅ Using label mapping file: ${LABEL_MAPPING_FILE}"
-            LABEL_MAPPING_ARG="--label_mapping_file scannetv2-labels.combined.tsv"
-        fi
-        
-        # Run from lseg_encoder directory
-        cd "${FEATURE_3DGS_DIR}/encoders/lseg_encoder" || exit 1
-        echo "Working directory: $(pwd)"
-        
-        # Compute metrics for all saved iterations
-        for ITER in ${SAVE_ITERATIONS}; do
-            echo "Computing Ground Truth metrics for iteration ${ITER}..."
+            echo "✅ Found GT label directory: ${GT_LABEL_DIR}"
             
-            python -u segmentation_metric_gt.py \
-                --weights demo_e200.ckpt \
-                --data "${CASE_OUTPUT_DIR}" \
-                --scene_data_path "${SCENE_DATA_DIR}" \
-                --json_split_path "${JSON_SPLIT_PATH}" \
-                --case_id ${CASE_ID} \
-                --label_src "${SEMANTIC_LABELS}" \
-                ${LABEL_MAPPING_ARG} \
-                --iteration ${ITER} \
-                --output "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_iter${ITER}_gt_metrics.json" \
-                2>&1
-            
-            GT_METRICS_STATUS=$?
-            if [ ${GT_METRICS_STATUS} -ne 0 ]; then
-                echo "⚠️  Ground Truth metrics failed for iteration ${ITER}"
+            # Check if label mapping file exists
+            LABEL_MAPPING_FILE="${FEATURE_3DGS_DIR}/encoders/lseg_encoder/scannetv2-labels.combined.tsv"
+            if [ ! -f "${LABEL_MAPPING_FILE}" ]; then
+                echo "⚠️  Warning: Label mapping file not found: ${LABEL_MAPPING_FILE}"
+                echo "   GT metrics will use identity mapping (may be incorrect for ScanNet)"
+                LABEL_MAPPING_ARG=""
             else
-                echo "✅ Ground Truth metrics iteration ${ITER} computed"
+                echo "✅ Using label mapping file: ${LABEL_MAPPING_FILE}"
+                LABEL_MAPPING_ARG="--label_mapping_file scannetv2-labels.combined.tsv"
             fi
-        done
-        
-        echo "✅ All Ground Truth metrics computed"
-        
-        # Return to feature-3dgs root
-        cd "${FEATURE_3DGS_DIR}" || exit 1
+            
+            # Run from lseg_encoder directory
+            cd "${FEATURE_3DGS_DIR}/encoders/lseg_encoder" || exit 1
+            echo "Working directory: $(pwd)"
+            
+            # Compute metrics for all saved iterations
+            for ITER in ${SAVE_ITERATIONS}; do
+                echo "Computing Ground Truth metrics for iteration ${ITER}..."
+                
+                python -u segmentation_metric_gt.py \
+                    --weights demo_e200.ckpt \
+                    --data "${CASE_OUTPUT_DIR}" \
+                    --scene_data_path "${SCENE_DATA_DIR}" \
+                    --json_split_path "${JSON_SPLIT_PATH}" \
+                    --case_id ${CASE_ID} \
+                    --label_src "${SEMANTIC_LABELS}" \
+                    ${LABEL_MAPPING_ARG} \
+                    --iteration ${ITER} \
+                    --output "${CASE_OUTPUT_DIR}/results/${SCENE_NAME}_case${CASE_ID}_iter${ITER}_gt_metrics.json" \
+                    2>&1
+                
+                GT_METRICS_STATUS=$?
+                if [ ${GT_METRICS_STATUS} -ne 0 ]; then
+                    echo "⚠️  Ground Truth metrics failed for iteration ${ITER}"
+                else
+                    echo "✅ Ground Truth metrics iteration ${ITER} computed"
+                fi
+            done
+            
+            echo "✅ All Ground Truth metrics computed"
+            
+            # Return to feature-3dgs root
+            cd "${FEATURE_3DGS_DIR}" || exit 1
+        fi
         
         # ----------------------------------------------------------------
         # Case summary
