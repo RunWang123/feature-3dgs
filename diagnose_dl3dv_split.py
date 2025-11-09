@@ -17,24 +17,24 @@ def read_images_txt(images_txt_path):
     """Read COLMAP images.txt and return dict of image_name -> image_id"""
     images = {}
     with open(images_txt_path, 'r') as f:
-        reading_image = False
         for line in f:
             line = line.strip()
+            # Skip empty lines and comments
             if not line or line.startswith('#'):
                 continue
             
-            if not reading_image:
-                # Image line: IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME
-                parts = line.split()
-                image_id = int(parts[0])
-                image_name = parts[9]
-                # Strip extension for comparison
-                name_no_ext = os.path.splitext(image_name)[0]
-                images[name_no_ext] = image_id
-                reading_image = True
-            else:
-                # Points line (skip)
-                reading_image = False
+            # Image line: IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME
+            parts = line.split()
+            if len(parts) >= 10:  # Valid image line
+                try:
+                    image_id = int(parts[0])
+                    image_name = parts[9]
+                    # Strip extension for comparison
+                    name_no_ext = os.path.splitext(image_name)[0]
+                    images[name_no_ext] = image_id
+                except (ValueError, IndexError):
+                    # Skip malformed lines
+                    continue
     
     return images
 
