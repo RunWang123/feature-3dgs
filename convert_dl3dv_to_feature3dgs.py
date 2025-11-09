@@ -9,8 +9,9 @@ This script:
 4. Central crops and resizes images to 448x448
 5. Adjusts camera intrinsics accordingly
 6. Flips Y/Z axes to convert from OpenGL (Y up, Z back) to COLMAP (Y down, Z forward)
+   - Applies to BOTH camera poses AND 3D points for consistency!
 7. Converts poses from C2W to W2C (no normalization - keeps original scale)
-8. Outputs feature-3dgs compatible structure with aligned 3D points
+8. Outputs feature-3dgs compatible structure with properly aligned cameras and points
 """
 
 import os
@@ -596,7 +597,7 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
             'image_name': output_name
         })
     
-    # Read 3D points (keep original scale - no normalization)
+    # Read 3D points and transform coordinate system to match cameras
     print("\nProcessing 3D points...")
     points3d_data = None
     points3d_bin = os.path.join(sparse_dir, 'points3D.bin')
@@ -606,16 +607,24 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
             points3d = read_points3D_binary(points3d_bin)
             print(f"  Found {len(points3d)} 3D points")
             
-            # Keep 3D points at original scale (no normalization)
+            # Transform 3D points from OpenGL to OpenCV coordinate system
+            # This must match the camera coordinate transformation!
             points3d_data = []
             for point_id, (xyz, rgb, error, track) in points3d.items():
+                # Apply the same coordinate transformation as cameras:
+                # OpenGL (Y up, Z back) → OpenCV (Y down, Z forward)
+                # This means flipping Y and Z coordinates
+                xyz_transformed = xyz.copy()
+                xyz_transformed[1] = -xyz[1]  # Flip Y
+                xyz_transformed[2] = -xyz[2]  # Flip Z
+                
                 points3d_data.append({
                     'point_id': point_id,
-                    'xyz': xyz,  # Keep original coordinates
+                    'xyz': xyz_transformed,
                     'rgb': rgb
                 })
             
-            print(f"  Loaded {len(points3d_data)} 3D points (original scale)")
+            print(f"  Loaded {len(points3d_data)} 3D points (transformed to OpenCV coordinates)")
         except Exception as e:
             print(f"⚠️  Warning: Could not read 3D points: {e}")
             print("  Will use random initialization instead")
