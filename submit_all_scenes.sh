@@ -110,16 +110,58 @@ for SCENE_NAME in ${SCENE_NAMES}; do
     
     # Check if we should skip this scene
     if [ "${SKIP_EXISTING}" == "true" ]; then
-        # Check if output already exists
-        SCENE_OUTPUT="${OUTPUT_BASE_DIR}/${SCENE_NAME}_case0"
-        if [ -d "${SCENE_OUTPUT}" ]; then
-            # Check if training completed (look for final checkpoint)
-            if [ -f "${SCENE_OUTPUT}/point_cloud/iteration_30000/point_cloud.ply" ]; then
-                echo "  ⏭️  Skipping (already completed)"
-                SKIPPED_JOBS=$((SKIPPED_JOBS + 1))
-                echo ""
-                continue
+        # Check for any completed cases (case0, case1, etc.)
+        # A case is complete if it has results.json (metrics computed)
+        SHOULD_SKIP=true
+        
+        # Get number of cases for this scene from JSON
+        NUM_CASES=$(python3 -c "
+import json
+with open('${JSON_SPLIT_PATH}', 'r') as f:
+    data = json.load(f)
+if '${SCENE_NAME}' in data['scenes']:
+    print(len(data['scenes']['${SCENE_NAME}']))
+else:
+    print(0)
+" 2>/dev/null)
+        
+        if [ -z "$NUM_CASES" ] || [ "$NUM_CASES" -eq 0 ]; then
+            NUM_CASES=1  # Default to 1 case
+        fi
+        
+        # Check if ALL cases are completed
+        for CASE_ID in $(seq 0 $((NUM_CASES - 1))); do
+            CASE_OUTPUT="${OUTPUT_BASE_DIR}/${SCENE_NAME}_case${CASE_ID}"
+            
+            # Check multiple completion indicators
+            if [ ! -d "${CASE_OUTPUT}" ]; then
+                SHOULD_SKIP=false
+                break
             fi
+            
+            # Check for results.json (metrics completed) OR final checkpoint
+            if [ ! -f "${CASE_OUTPUT}/results.json" ]; then
+                # No results.json, check for any final checkpoint
+                FOUND_CHECKPOINT=false
+                for PLY in "${CASE_OUTPUT}"/point_cloud/iteration_*/point_cloud.ply; do
+                    if [ -f "$PLY" ]; then
+                        FOUND_CHECKPOINT=true
+                        break
+                    fi
+                done
+                
+                if [ "$FOUND_CHECKPOINT" = false ]; then
+                    SHOULD_SKIP=false
+                    break
+                fi
+            fi
+        done
+        
+        if [ "$SHOULD_SKIP" = true ]; then
+            echo "  ⏭️  Skipping (all ${NUM_CASES} case(s) already completed)"
+            SKIPPED_JOBS=$((SKIPPED_JOBS + 1))
+            echo ""
+            continue
         fi
     fi
     
