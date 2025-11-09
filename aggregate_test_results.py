@@ -63,8 +63,9 @@ def load_segmentation_metrics_all_iterations(scene_case_dir):
     scene_name = parts[0]
     case_id = parts[1]
     
-    # All iterations to check
-    iterations = ['2000', '3000', '4000', '5000', '6000', '7000']
+    # All iterations to check (must match SAVE_ITERATIONS in process_single_scene.sh)
+    # Default: 3000, 7000, 15000, 30000
+    iterations = ['3000', '7000', '15000', '30000']
     
     # Metadata fields to exclude (not actual metrics)
     metadata_fields = {
@@ -689,7 +690,7 @@ This separation is important for fair comparison with other methods.
     print(f"{'='*80}")
     print(f"Results directory: {results_dir}")
     print(f"Output directory:  {output_dir}")
-    print(f"Iterations:        2000, 3000, 4000, 5000, 6000, 7000 (all)")
+    print(f"Iterations:        3000, 7000, 15000, 30000 (all saved iterations)")
     print(f"{'='*80}\n")
     
     # Collect all results
