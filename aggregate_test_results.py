@@ -100,34 +100,48 @@ def load_segmentation_metrics_all_iterations(scene_case_dir):
     all_seg_metrics = {}
     
     for iteration in iterations:
-        # Construct expected filenames (use gt_metrics, not teacher_student_metrics)
-        base_name = f"{scene_name}_case{case_id}_iter{iteration}_gt_metrics"
-        train_file = results_dir / f"{base_name}_train.json"
-        test_file = results_dir / f"{base_name}_test.json"
+        # Try gt_metrics first (ScanNet), fall back to teacher_student_metrics (DL3DV)
+        # GT metrics compare to ground truth labels (only available for ScanNet)
+        # Teacher-student metrics compare to teacher model predictions (available for all datasets)
+        
+        gt_base = f"{scene_name}_case{case_id}_iter{iteration}_gt_metrics"
+        ts_base = f"{scene_name}_case{case_id}_iter{iteration}_teacher_student_metrics"
         
         iter_metrics = {}
         
-        # Load train split
-        if train_file.exists():
-            try:
-                with open(train_file, 'r') as f:
-                    data = json.load(f)
-                    filtered = filter_metrics(data)
-                    if filtered:
-                        iter_metrics['train'] = filtered
-            except Exception as e:
-                pass  # Silently skip missing files
+        # Load train split (try GT first, then teacher-student)
+        train_file_gt = results_dir / f"{gt_base}_train.json"
+        train_file_ts = results_dir / f"{ts_base}_train.json"
         
-        # Load test split
-        if test_file.exists():
-            try:
-                with open(test_file, 'r') as f:
-                    data = json.load(f)
-                    filtered = filter_metrics(data)
-                    if filtered:
-                        iter_metrics['test'] = filtered
-            except Exception as e:
-                pass  # Silently skip missing files
+        train_loaded = False
+        for train_file in [train_file_gt, train_file_ts]:
+            if train_file.exists() and not train_loaded:
+                try:
+                    with open(train_file, 'r') as f:
+                        data = json.load(f)
+                        filtered = filter_metrics(data)
+                        if filtered:
+                            iter_metrics['train'] = filtered
+                            train_loaded = True
+                except Exception as e:
+                    pass  # Try next file
+        
+        # Load test split (try GT first, then teacher-student)
+        test_file_gt = results_dir / f"{gt_base}_test.json"
+        test_file_ts = results_dir / f"{ts_base}_test.json"
+        
+        test_loaded = False
+        for test_file in [test_file_gt, test_file_ts]:
+            if test_file.exists() and not test_loaded:
+                try:
+                    with open(test_file, 'r') as f:
+                        data = json.load(f)
+                        filtered = filter_metrics(data)
+                        if filtered:
+                            iter_metrics['test'] = filtered
+                            test_loaded = True
+                except Exception as e:
+                    pass  # Try next file
         
         if iter_metrics:
             all_seg_metrics[f'iter_{iteration}'] = iter_metrics
