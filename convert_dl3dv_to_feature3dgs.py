@@ -9,9 +9,8 @@ This script:
 4. Central crops and resizes images to 448x448
 5. Adjusts camera intrinsics accordingly
 6. Flips Y/Z axes to convert from OpenGL (Y up, Z back) to COLMAP (Y down, Z forward)
-7. Normalizes camera poses and 3D points to [-1, 1] range (like Blender synthetic scenes)
-8. Converts poses from C2W to W2C format
-9. Outputs feature-3dgs compatible structure ready for hardcoded random init [-1.3, 1.3]
+7. Converts poses from C2W to W2C (no normalization - keeps original scale)
+8. Outputs feature-3dgs compatible structure with aligned 3D points
 """
 
 import os
@@ -568,44 +567,18 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
     
     print(f"\n✓ Processed {len(available_frames)} images")
     
-    # Normalize camera poses to [-1, 1] range (like ScanNet/Blender synthetic)
-    print("\nNormalizing camera poses...")
-    
-    # First pass: compute scene center and radius from C2W translations
-    camera_centers = []
-    for frame in available_frames:
-        c2w = frame['transform_matrix'].copy()
-        # Apply coordinate system conversion before computing centers
-        c2w[:3, 1:3] *= -1  # OpenGL -> COLMAP
-        camera_centers.append(c2w[:3, 3])
-    
-    camera_centers = np.array(camera_centers)
-    scene_center = np.mean(camera_centers, axis=0)
-    scene_radius = np.max(np.linalg.norm(camera_centers - scene_center, axis=1))
-    
-    # Normalize to fit in [-1, 1] range (with 1.1x margin like Blender)
-    scale = 1.0 / (scene_radius * 1.1)
-    
-    print(f"  Scene center: [{scene_center[0]:.2f}, {scene_center[1]:.2f}, {scene_center[2]:.2f}]")
-    print(f"  Scene radius: {scene_radius:.2f} meters")
-    print(f"  Normalization scale: {scale:.4f}")
-    print(f"  Normalized camera range: approximately [-1, 1]")
-    
-    # Convert poses from C2W to W2C format with normalization
+    # Convert poses from C2W to W2C format (no normalization - keep original scale)
     print("\nConverting camera poses to COLMAP format...")
     image_data = []
     for idx, frame in enumerate(available_frames):
-        c2w = frame['transform_matrix'].copy()
+        c2w = frame['transform_matrix']
         output_name = frame['output_name']
         
         # ⚠️ CRITICAL: Change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
         # DL3DV transforms.json uses NeRF/OpenGL convention, need to flip Y and Z axes
         c2w[:3, 1:3] *= -1
         
-        # Normalize translation to [-1, 1] range
-        c2w[:3, 3] = (c2w[:3, 3] - scene_center) * scale
-        
-        # Convert C2W to W2C (COLMAP format)
+        # Convert C2W to W2C (COLMAP format) - keep original scale
         w2c = np.linalg.inv(c2w)
         R_w2c = w2c[:3, :3]
         t_w2c = w2c[:3, 3]
@@ -621,7 +594,7 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
             'image_name': output_name
         })
     
-    # Read and normalize 3D points
+    # Read 3D points (keep original scale - no normalization)
     print("\nProcessing 3D points...")
     points3d_data = None
     points3d_bin = os.path.join(sparse_dir, 'points3D.bin')
@@ -631,18 +604,16 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
             points3d = read_points3D_binary(points3d_bin)
             print(f"  Found {len(points3d)} 3D points")
             
-            # Apply same normalization as cameras to 3D points
+            # Keep 3D points at original scale (no normalization)
             points3d_data = []
             for point_id, (xyz, rgb, error, track) in points3d.items():
-                # Normalize point coordinates to match camera normalization
-                xyz_normalized = (xyz - scene_center) * scale
                 points3d_data.append({
                     'point_id': point_id,
-                    'xyz': xyz_normalized,
+                    'xyz': xyz,  # Keep original coordinates
                     'rgb': rgb
                 })
             
-            print(f"  Loaded {len(points3d_data)} 3D points (normalized to [-1, 1] range)")
+            print(f"  Loaded {len(points3d_data)} 3D points (original scale)")
         except Exception as e:
             print(f"⚠️  Warning: Could not read 3D points: {e}")
             print("  Will use random initialization instead")

@@ -313,9 +313,6 @@ def readColmapSceneInfo(path, foundation_model, images, eval, llffhold=8, json_s
                 print("No COLMAP 3D points found. Generating random point cloud for initialization...")
                 num_pts = 100_000
                 print(f"Generating random point cloud ({num_pts})...")
-                
-                # Use hardcoded bounds matching Blender synthetic scenes [-1.3, 1.3]
-                # Cameras should be normalized to [-1, 1] range during conversion
                 xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
                 rgb = np.random.random((num_pts, 3)) * 255.0
         storePly(ply_path, xyz, rgb)
@@ -403,8 +400,7 @@ def readNerfSyntheticInfo(path, foundation_model, white_background, eval, extens
         num_pts = 100_000
         print(f"Generating random point cloud ({num_pts})...")
         
-        # Use hardcoded bounds matching Blender synthetic scenes [-1.3, 1.3]
-        # Cameras should be normalized to [-1, 1] range during conversion
+        # We create random points inside the bounds of the synthetic Blender scenes
         xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
         shs = np.random.random((num_pts, 3)) / 255.0
         pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
