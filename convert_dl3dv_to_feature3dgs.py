@@ -4,12 +4,13 @@ Convert DL3DV dataset to feature-3dgs format with preprocessing.
 
 This script:
 1. Reads camera intrinsics from COLMAP sparse/0/cameras.bin (matches 3D points!)
-2. Reads camera poses from transforms.json (C2W format)
+2. Reads camera poses from transforms.json (C2W format, OpenGL/NeRF convention)
 3. Uses images from gaussian_splat/images_4/
 4. Central crops and resizes images to 448x448
 5. Adjusts camera intrinsics accordingly
-6. Converts poses from C2W to W2C (no normalization - keeps original scale)
-7. Outputs feature-3dgs compatible structure with aligned 3D points
+6. Flips Y/Z axes to convert from OpenGL (Y up, Z back) to COLMAP (Y down, Z forward)
+7. Converts poses from C2W to W2C (no normalization - keeps original scale)
+8. Outputs feature-3dgs compatible structure with aligned 3D points
 """
 
 import os
@@ -572,6 +573,10 @@ def convert_dl3dv_scene(scene_path, output_path, target_size=448):
     for idx, frame in enumerate(available_frames):
         c2w = frame['transform_matrix']
         output_name = frame['output_name']
+        
+        # ⚠️ CRITICAL: Change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
+        # DL3DV transforms.json uses NeRF/OpenGL convention, need to flip Y and Z axes
+        c2w[:3, 1:3] *= -1
         
         # Convert C2W to W2C (COLMAP format) - keep original scale
         w2c = np.linalg.inv(c2w)
